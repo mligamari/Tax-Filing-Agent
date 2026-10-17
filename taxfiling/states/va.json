@@ -1,0 +1,34 @@
+{
+  "state": "VA",
+  "name": "Virginia",
+  "fips": "51",
+  "reports": {
+    "w2": {
+      "agency": "Virginia Department of Taxation (Virginia Tax)",
+      "portal": "Web Upload, W-2 text file",
+      "format": "EFW2",
+      "layout": "efw2_ty2026",
+      "employee_records": ["RW", "RS"],
+      "state_record": "RS",
+      "state_record_values": {"state_code": "51", "state_code_2": "51"},
+      "account_number": {
+        "field": "state_employer_account",
+        "pattern": "^(30|38)[0-9A-Z]{13}$",
+        "description": "Virginia withholding account number: 15 characters starting with 30 (withholding) or 38 (pass-through entity), hyphens removed, e.g. 30 + FEIN + F001"
+      },
+      "final_line_ending": false,
+      "default_file_name": "W2 REPORT {year}.txt",
+      "rules": [
+        "Virginia requires one RS record per employee, with state code 51; SSA does not require RS.",
+        "Virginia reads the RE record (tax year in positions 3-6, FEIN, name) and the RS records. Other EFW2 records may be included but are not used or validated.",
+        "If an RE record has an error, Virginia does not review its RS records until it is corrected.",
+        "Records may be separated by CR/LF; each record except the last is followed by exactly one CR/LF.",
+        "Only one form type per file. Virginia recommends naming the file 'W2 REPORT', optionally with the tax year, and no special characters."
+      ],
+      "source": {
+        "title": "Virginia Tax, Web Upload Guide for W-2 and 1099 files (Appendix A)",
+        "url": "https://tax.am.virginia.gov/sites/default/files/inline-files/web-upload-w2-1099-guide.pdf"
+      }
+    }
+  }
+}

@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+.pytest_cache/
+
+# Real payroll data never belongs in this repository. Keep it outside the
+# checkout, or in private/, which is ignored.
+private/
+*.real.xlsx

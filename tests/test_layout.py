@@ -1,0 +1,111 @@
+import json
+import random
+from decimal import Decimal
+
+import pytest
+
+from taxfiling.layout import (LAYOUT_DIR, Field, LayoutError, decode_record, encode_record, format_field,
+                              load_layout)
+
+
+def field(type_, length=5, **kw):
+    return Field(key="f", name="F", start=1, end=length, type=type_, required=False, **kw)
+
+
+def test_every_layout_table_is_contiguous_and_full_length():
+    for path in LAYOUT_DIR.glob("*.json"):
+        layout = load_layout(path)  # load_layout runs check_layout and raises on any gap or overlap
+        for rec in layout.records.values():
+            assert rec.fields[0].start == 1
+            assert rec.fields[-1].end == layout.record_length
+
+
+def test_check_layout_rejects_a_gap(tmp_path):
+    data = json.loads((LAYOUT_DIR / "efw2_ty2026.json").read_text())
+    data["records"]["RF"]["fields"][2]["start"] += 1
+    broken = tmp_path / "broken.json"
+    broken.write_text(json.dumps(data))
+    with pytest.raises(LayoutError):
+        load_layout(broken)
+
+
+def test_every_field_names_a_known_source(layout):
+    for rec in layout.records.values():
+        for f in rec.fields:
+            assert f.sources, f.key
+            assert set(f.sources) <= set(layout.sources), (rec.record_type, f.key, f.sources)
+
+
+def test_rt_totals_point_at_real_rw_money_fields(layout):
+    rw_money = {f.key for f in layout["RW"].fields if f.type == "M"}
+    sums = [f.sum_of for f in layout["RT"].fields if f.sum_of]
+    assert set(sums) <= rw_money
+    assert len(sums) == len(set(sums))
+
+
+def test_alpha_is_uppercased_left_justified_and_never_truncated():
+    assert format_field(field("A"), "ab") == "AB   "
+    assert format_field(field("A", case="mixed"), "ab") == "ab   "
+    with pytest.raises(LayoutError):
+        format_field(field("A"), "toolong")
+    with pytest.raises(LayoutError):
+        format_field(field("A"), "Zoë")
+
+
+def test_numeric_and_money_are_right_justified_zero_filled():
+    assert format_field(field("N"), "42") == "00042"
+    assert format_field(field("M", 11), Decimal("33435.14")) == "00003343514"
+    assert format_field(field("M", 11), 0.1 + 0.2) == "00000000030"
+    assert format_field(field("MW"), 1200) == "01200"
+    with pytest.raises(LayoutError):
+        format_field(field("M", 11), Decimal("-1.00"))
+    with pytest.raises(LayoutError):
+        format_field(field("M", 3), Decimal("10.00"))
+    with pytest.raises(LayoutError):
+        format_field(field("N"), "12a")
+    with pytest.raises(LayoutError):
+        format_field(field("MW"), Decimal("1.50"))
+
+
+def test_empty_values():
+    assert format_field(field("M"), None) == "00000"
+    assert format_field(field("M", empty="blank"), None) == "     "
+    assert format_field(field("A"), None) == "     "
+    assert format_field(field("blank"), "ignored") == "     "
+
+
+def test_encode_then_decode_returns_the_same_values(layout):
+    rng = random.Random(7)
+    for rt, rec in layout.records.items():
+        for _ in range(25):
+            values = {}
+            for f in rec.fields:
+                if f.type == "A":
+                    values[f.key] = "".join(rng.choice("ABC XYZ-9") for _ in range(rng.randint(0, f.length))).strip()
+                elif f.type == "N":
+                    values[f.key] = str(rng.randint(0, 10 ** f.length - 1)).zfill(f.length)
+                elif f.type == "M":
+                    values[f.key] = Decimal(rng.randint(0, 10 ** min(f.length, 12) - 1)) / 100
+            line = encode_record(rec, values, layout.record_length)
+            assert len(line) == layout.record_length
+            back = decode_record(rec, line)
+            for key, value in values.items():
+                assert back[key] == value, (rt, key)
+
+
+def test_unknown_field_key_is_rejected(layout):
+    with pytest.raises(LayoutError):
+        encode_record(layout["RF"], {"no_such_field": "1"}, layout.record_length)
+
+
+def test_layout_json_matches_its_source_script(tmp_path):
+    """tools/build_efw2_ty2026_layout.py is where fields were typed in; the JSON must not drift from it."""
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    out = tmp_path / "efw2_ty2026.json"
+    subprocess.run([sys.executable, str(root / "tools" / "build_efw2_ty2026_layout.py"), str(out)],
+                   check=True, capture_output=True)
+    assert out.read_text() == (LAYOUT_DIR / "efw2_ty2026.json").read_text()
