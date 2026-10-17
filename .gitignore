@@ -12,5 +12,5 @@ dist/
 # committed example output lives under examples/.
 private/
 *.real.xlsx
-/*.txt
+/W2 REPORT*.txt
 /output/

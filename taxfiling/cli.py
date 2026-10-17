@@ -77,13 +77,14 @@ def cmd_w2(args) -> int:
     out = Path(args.out or profile["default_file_name"].format(year=report.tax_year))
     if not result.ok:
         print(format_report(result, title="Round-trip check"))
-        print(f"No file written: the round-trip check failed, so {out} was not created.")
+        if out.exists():
+            print(f"No file written: the round-trip check failed. {out} is an older file from an earlier "
+                  "run and was NOT updated; do not upload it.")
+        else:
+            print(f"No file written: the round-trip check failed, so {out} was not created.")
         return 1
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_bytes(data)
-    if out.read_bytes() != data:
-        print(f"error: {out} does not read back as written", file=sys.stderr)
-        return 1
     print(f"Wrote {out} ({len(data):,} bytes) for {profile['state_name']} "
           f"({profile['agency']}, {profile['portal']})")
     print(format_report(result, title="Round-trip check"))

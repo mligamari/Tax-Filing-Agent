@@ -209,6 +209,9 @@ class Efw2Builder:
             if "RS" in employee_records:
                 self.rs(w2)
         rw_values = [v for rt, v in self.records if rt == "RW"]
+        if not rw_values:
+            self.issues.error("input", f"no employees to report for {self.profile.get('state_name', 'this file')}; "
+                                       "check the Box 15 state column and the column mapping")
         self.rt(len(rw_values), rw_values)
         self.rf(len(rw_values))
         return self.records

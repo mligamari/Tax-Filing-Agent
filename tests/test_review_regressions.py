@@ -116,3 +116,62 @@ def test_box_12_field_names_match_their_codes(layout):
     for f in layout["RW"].fields:
         if f.key.startswith("code_"):
             assert f"(Box 12 {f.key[5:]})" in f.name, f.key
+
+
+def test_zip_values_that_cannot_be_right_are_errors(tmp_path):
+    for bad in (123456, 12, 1234567890, 2134.5, "2213"):
+        path = tmp_path / f"w2_{bad}.xlsx"
+        mapping = _tiny_workbook(path, ssn="123-45-6789", zip_code=bad)
+        _, _, issues = read_w2_workbook(path, mapping)
+        assert any("ZIP" in e.message for e in issues.errors), bad
+
+
+def test_employer_zip_plus_4_is_kept(tmp_path):
+    path = tmp_path / "w2.xlsx"
+    mapping = _tiny_workbook(path, ssn="123-45-6789", zip_code="23230")
+    from openpyxl import load_workbook
+    wb = load_workbook(path)
+    ws = wb.active
+    headers = [c.value for c in ws[1]]
+    ws.cell(row=2, column=headers.index(mapping["columns"]["employer_zip"]) + 1, value="23230-1234")
+    wb.save(path)
+    employer, _, issues = read_w2_workbook(path, mapping)
+    assert (employer.address.zip, employer.address.zip_ext) == ("23230", "1234")
+
+
+def test_a_file_with_no_employees_is_refused(va_report, layout, va_profile):
+    for w in va_report.employees:
+        w.states = []
+    text, issues = build_efw2(va_report, layout, va_profile)
+    assert text is None
+    assert any("no employees to report" in e.message for e in issues.errors)
+
+
+def test_an_address_cut_far_short_of_the_field_is_an_error(va_report, layout, va_profile):
+    text, _ = build_efw2(va_report, layout, va_profile)
+    lines = text.split("\r\n")
+    lines[2] = put(lines[2], 88, "4020".ljust(22))  # source: 4020 MONUMENT AVE
+    assert "street address" in errors(check_file("\r\n".join(lines).encode(), layout, va_profile, source=va_report))
+
+
+def test_a_missing_rs_is_reported_once(va_report, layout, va_profile):
+    text, _ = build_efw2(va_report, layout, va_profile)
+    lines = text.split("\r\n")
+    del lines[3]
+    result = check_file("\r\n".join(lines).encode(), layout, va_profile, source=va_report)
+    assert len([e for e in result.issues.errors if "RS" in e.message]) == 1
+
+
+def test_an_older_file_is_called_out_when_the_check_fails(tmp_path, monkeypatch, capsys):
+    out = tmp_path / "W2 REPORT 2026.txt"
+    out.write_text("older run")
+
+    def failing_check(*args, **kwargs):
+        result = CheckResult()
+        result.issues.error("test", "forced failure")
+        return result
+    monkeypatch.setattr(cli, "check_file", failing_check)
+    cli.main(["w2", "--state", "VA", "--input", str(VA_WORKBOOK), "--submitter", str(VA_SUBMITTER),
+              "--out", str(out)])
+    assert out.read_text() == "older run"
+    assert "NOT updated" in capsys.readouterr().out

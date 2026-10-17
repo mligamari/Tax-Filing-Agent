@@ -66,18 +66,26 @@ def _digits(value: Any, width: int, label: str, where: str, issues: Issues, *, s
 
 
 def _zip(value: Any, label: str, where: str, issues: Issues) -> str:
-    """ZIP or ZIP+4 as 5 or 9 digits. A number cell drops leading zeros: 2134 was 02134, and
-    an 8-digit 21381234 was the ZIP+4 02138-1234 (no ZIP code starts with 000)."""
-    if isinstance(value, (int, float)):
-        text = _text(value)
-        if text.isdigit() and len(text) not in (5, 9):
-            width = 5 if len(text) < 5 else 9
-            if len(text) < 9:
-                issues.warning(where, f"{label} {text} was stored as a number, which drops leading zeros; "
-                                      f"read as {text.zfill(width)}. Check it against the source record.")
-                return text.zfill(width)
+    """ZIP or ZIP+4 as 5 or 9 digits.
+
+    A number cell drops leading zeros, so 2134 was 02134 and 21381234 was 02138-1234. The
+    lowest ZIP code is 00501, so a value that would need padding below that is an error."""
+    if value is None or _text(value) == "":
+        return ""
+    numeric = isinstance(value, (int, float))
+    text = _text(value) if numeric else re.sub(r"[\s\-]", "", str(value))
+    if not text.isdigit():
+        issues.error(where, f"{label} '{value}' is not a ZIP code")
         return text
-    return _digits(value, 5, label, where, issues)
+    if numeric and len(text) < 9 and len(text) != 5:
+        fixed = text.zfill(5 if len(text) < 5 else 9)
+        if fixed[:5] >= "00501":
+            issues.warning(where, f"{label} {text} was stored as a number, which drops leading zeros; "
+                                  f"read as {fixed}. Check it against the source record.")
+            return fixed
+    if len(text) not in (5, 9):
+        issues.error(where, f"{label} '{value}' is not 5 or 9 digits")
+    return text
 
 
 def _money(value: Any, label: str, where: str, issues: Issues) -> Decimal:
@@ -141,13 +149,14 @@ def read_w2_workbook(path: str | Path, mapping: dict) -> tuple[Employer, list[W2
 
         ein = _digits(get("employer_ein"), 9, "Employer EIN", where, issues)
         if ein and ein not in employers:
+            employer_zip = _zip(get("employer_zip"), "Employer ZIP", where, issues)
             employers[ein] = Employer(
                 ein=ein,
                 name=_text(get("employer_name")),
                 address=Address(
                     delivery=_text(get("employer_address")), city=_text(get("employer_city")),
                     state=_text(get("employer_state")).upper(),
-                    zip=_zip(get("employer_zip"), "Employer ZIP", where, issues)[:5],
+                    zip=employer_zip[:5], zip_ext=employer_zip[5:9],
                 ),
             )
         employer = employers.get(ein)
