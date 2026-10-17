@@ -18,6 +18,14 @@ def load_state(code: str) -> dict:
     return json.loads(path.read_text())
 
 
+def in_state_file(w2, profile: dict) -> bool:
+    """Whether an employee belongs in this state's file. A state that wants only employees with
+    wages in that state says so with "only_employees_with_state_wages"."""
+    if not profile.get("only_employees_with_state_wages"):
+        return True
+    return any(s.state == profile["state"] for s in w2.states)
+
+
 def report_profile(code: str, report: str = "w2") -> dict:
     state = load_state(code)
     try:

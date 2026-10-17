@@ -8,6 +8,9 @@ Record order written: RA, RE, then for each employee RW followed by the state's
 RS record, then RT and RF. RO/RU (Box 8, Box 12 codes kept only in RO) are not
 written yet: their TY2026 layout has not been verified. Any such amount in the
 input is reported as a warning naming the employee and code.
+
+Which Box 12 codes have an RW field comes from the layout table (fields named
+code_<CODE>), so a new code in a later year's table needs no change here.
 """
 from __future__ import annotations
 
@@ -18,17 +21,15 @@ from typing import Any
 from ..issues import Issues
 from ..layout import Layout, LayoutError, encode_record
 from ..model import W2, Address, WageReport
+from ..states import in_state_file
 
-# Box 12 codes that have their own field in the RW record, and the RW field key.
-RW_BOX12 = {
-    "C": "code_C", "D": "code_D", "E": "code_E", "F": "code_F", "G": "code_G", "H": "code_H",
-    "Q": "code_Q", "V": "code_V", "W": "code_W", "Y": "code_Y", "AA": "code_AA", "BB": "code_BB",
-    "DD": "code_DD", "FF": "code_FF",
-}
-# Box 12 codes reported in the RO record (or nowhere in EFW2), which this writer does not produce yet.
+# Valid 2026 Box 12 codes that have no RW field: they go in the RO record (or nowhere in EFW2),
+# which this writer does not produce yet.
 RO_BOX12 = {"A", "B", "J", "K", "L", "M", "N", "P", "R", "S", "T", "Z", "EE", "GG", "HH", "II", "TA", "TP", "TT"}
 
-UNIT_WORDS = re.compile(r"\s+((?:APT|APARTMENT|STE|SUITE|UNIT|RM|ROOM|FL|FLOOR|BLDG|#)\b\.?\s*\S.*)$", re.I)
+# Where a secondary unit (Apt 4B, Suite 200, # 12) starts in a street address.
+UNIT_START = re.compile(r"\s+(?=(?:(?:APT|APARTMENT|STE|SUITE|UNIT|RM|ROOM|FL|FLOOR|BLDG|LOT|TRLR|SPC|DEPT)\b|#))",
+                        re.I)
 
 
 class Efw2Builder:
@@ -38,6 +39,7 @@ class Efw2Builder:
         self.issues = Issues()
         self.records: list[tuple[str, dict[str, Any]]] = []
         self._people: dict[int, dict[str, Any]] = {}
+        self.rw_box12 = {f.key[5:]: f.key for f in layout["RW"].fields if f.key.startswith("code_")}
 
     # ---- helpers -------------------------------------------------------
     def _fit(self, value: str, record: str, key: str, where: str, *, truncate: bool = False) -> str:
@@ -60,9 +62,10 @@ class Efw2Builder:
         delivery, location = addr.delivery.strip(), addr.location.strip()
         width = self.layout[record][f"{prefix}delivery_address"].length
         if len(delivery) > width and not location:
-            m = UNIT_WORDS.search(delivery)
-            if m:
-                delivery, location = delivery[: m.start()].strip(), m.group(1).strip()
+            starts = list(UNIT_START.finditer(delivery))
+            if starts:  # split at the last unit word, so "100 Suite Hollow Rd Apt 12" keeps its street
+                m = starts[-1]
+                delivery, location = delivery[: m.start()].strip(), delivery[m.end():].strip()
         return {
             f"{prefix}location_address": self._fit(location, record, f"{prefix}location_address", where, truncate=True),
             f"{prefix}delivery_address": self._fit(delivery, record, f"{prefix}delivery_address", where, truncate=True),
@@ -131,15 +134,15 @@ class Efw2Builder:
         for key in ("box1_wages", "box2_fed_tax", "box3_ss_wages", "box4_ss_tax", "box5_medicare_wages",
                     "box6_medicare_tax", "box7_ss_tips", "box10_dependent_care"):
             values[key] = getattr(w2, key)
-        for key in RW_BOX12.values():
+        for key in self.rw_box12.values():
             values[key] = Decimal(0)
         values["box11_nonqual_457"] = values["box11_nonqual_not_457"] = Decimal(0)
         if w2.box11_nonqualified:
             self.issues.error(where, f"Box 11 {w2.box11_nonqualified}: EFW2 splits Box 11 into section 457 and "
                                      "non-457 amounts; the input does not say which, so it is not written")
         for code, amount in w2.box12.items():
-            if code in RW_BOX12:
-                values[RW_BOX12[code]] = amount
+            if code in self.rw_box12:
+                values[self.rw_box12[code]] = amount
             elif code in RO_BOX12:
                 self.issues.warning(where, f"Box 12 code {code} ({amount}) belongs in the RO record, which is "
                                            "not written yet (TY2026 layout unverified). Virginia does not read RO.")
@@ -198,6 +201,10 @@ class Efw2Builder:
         self.re(report)
         employee_records = self.profile.get("employee_records", ["RW"])
         for w2 in report.employees:
+            if not in_state_file(w2, self.profile):
+                self.issues.warning(w2.where(), f"no {self.profile['state_name']} wages in Box 15-17, so this "
+                                                f"employee is left out of the {self.profile['state_name']} file")
+                continue
             self.rw(w2)
             if "RS" in employee_records:
                 self.rs(w2)

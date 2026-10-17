@@ -10,6 +10,8 @@
       "layout": "efw2_ty2026",
       "employee_records": ["RW", "RS"],
       "state_record": "RS",
+      "only_employees_with_state_wages": true,
+      "one_state_record_per_employee": true,
       "state_record_values": {"state_code": "51", "state_code_2": "51"},
       "account_number": {
         "field": "state_employer_account",

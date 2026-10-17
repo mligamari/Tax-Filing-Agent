@@ -73,7 +73,7 @@ python -m pytest
 
 | Command | What it does |
 |---|---|
-| `w2` | Reads the workbook, validates it, writes the state file, then runs the round-trip check. Writes nothing if there is any error. |
+| `w2` | Reads the workbook, validates it, builds the state file and runs the round-trip check on it. The file is saved only if there are no errors and the check passes. |
 | `check` | Checks any file against the layout and state rules. With `--input` it also compares every employee and amount with the source. |
 | `show` | Prints a file field by field with positions. SSNs are masked unless `--show-ssn` is given. |
 | `layout` | Lists a layout table and the source document for every field. |
@@ -100,13 +100,14 @@ python -m pytest
 * **States are data too.** [`taxfiling/states/va.json`](taxfiling/states/va.json)
   holds Virginia's rules: state code 51, the account number format, one RS record per
   employee, CR/LF between records but not after the last one, and the file name the
-  state recommends.
+  state recommends. Employees with no Virginia wages are left out of the Virginia
+  file, with a note naming each one.
 * **The checker is independent of the writer.** It parses the file with the layout
   table alone and works out what each field should hold from the source data on its
   own (RW field `code_DD` must equal the Box 12 DD amount; RT totals must equal the
   sum of the RW records). A mapping mistake in the writer shows up as a mismatch
-  instead of being repeated. The tests damage a good file fourteen different ways
-  and confirm each one is caught.
+  instead of being repeated. The tests damage a good file in more than a dozen
+  ways and confirm each one is caught.
 * **Nothing is silently dropped or cut.** A name too long for its field is an error.
   An apartment number that does not fit moves to the EFW2 location-address field. A
   street that still does not fit is shortened with a warning that shows both versions.

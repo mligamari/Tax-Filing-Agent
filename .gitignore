@@ -7,6 +7,10 @@ dist/
 .pytest_cache/
 
 # Real payroll data never belongs in this repository. Keep it outside the
-# checkout, or in private/, which is ignored.
+# checkout, or in private/, which is ignored. Output files written to the
+# top folder (the default, e.g. "W2 REPORT 2026.txt") are ignored too; the
+# committed example output lives under examples/.
 private/
 *.real.xlsx
+/*.txt
+/output/

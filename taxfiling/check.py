@@ -32,6 +32,7 @@ from .issues import Issues
 from .layout import Layout, LayoutError, decode_record, encode_record
 from .model import W2, WageReport
 from .privacy import mask_ssn
+from .states import in_state_file
 
 NEXT = {
     None: {"RA"},
@@ -130,12 +131,33 @@ def _norm(text: str) -> str:
 
 
 def _expected_rw(w2: W2, key: str) -> Decimal:
-    """What an RW money field should hold, worked out from the field key itself."""
+    """What an RW money field should hold, worked out from the field key itself.
+    (The two Box 11 fields are compared as a pair, since the source has one Box 11 amount.)"""
     if key.startswith("code_"):
         return w2.box12.get(key[5:], Decimal(0))
-    if key.startswith("box11_"):
-        return Decimal(0)
     return getattr(w2, key)
+
+
+def _address_matches(delivery: str, location: str, src_delivery: str, src_location: str) -> str | None:
+    """Compare a written (delivery, location) pair with the source street address.
+
+    Returns "exact", "shortened" (each written part is the start of the matching source part,
+    as when the writer cut a part to fit or moved a unit number to the location field), or None.
+    """
+    src = _norm(f"{src_delivery} {src_location}")
+    if _norm(f"{delivery} {location}") == src:
+        return "exact"
+    if not delivery:
+        return None
+    if src_location:
+        splits = [(_norm(src_delivery), _norm(src_location))]
+    else:  # the writer may have split one source line at any space
+        words = src.split(" ")
+        splits = [(" ".join(words[:i]), " ".join(words[i:])) for i in range(1, len(words) + 1)]
+    for d, loc in splits:
+        if d.startswith(delivery) and (loc.startswith(location) if location else True):
+            return "shortened"
+    return None
 
 
 def _compare_text(label: str, written: str, source: str, where: str, issues: Issues, *, may_shorten: bool) -> None:
@@ -149,15 +171,15 @@ def _compare_text(label: str, written: str, source: str, where: str, issues: Iss
 
 
 def _compare_address(rec: dict, w2: W2, rt: str, where: str, issues: Issues) -> None:
-    src = _norm(" ".join(p for p in (w2.address.delivery, w2.address.location) if p))
     delivery, location = _norm(rec["delivery_address"]), _norm(rec["location_address"])
-    written = _norm(f"{delivery} {location}")
-    if written != src:
-        if not (delivery and src.startswith(delivery) and (not location or src.endswith(location))):
-            issues.error(where, f"{rt} street address '{written}' does not match source '{src}'")
-        else:
-            issues.warning(where, f"{rt} street address shortened to fit: '{src}' written as "
-                                  f"'{delivery}' + '{location}'")
+    src = _norm(f"{w2.address.delivery} {w2.address.location}")
+    match = _address_matches(delivery, location, w2.address.delivery, w2.address.location)
+    if match is None:
+        issues.error(where, f"{rt} street address '{_norm(f'{delivery} {location}')}' does not match "
+                            f"source '{src}'")
+    elif match == "shortened":
+        issues.warning(where, f"{rt} street address shortened to fit: '{src}' written as "
+                              f"'{delivery}' + '{location}'")
     _compare_text(f"{rt} city", rec["city"], w2.address.city, where, issues, may_shorten=True)
     for key, src_val in (("state", w2.address.state), ("zip", w2.address.zip), ("zip_ext", w2.address.zip_ext)):
         _compare_text(f"{rt} {key}", rec[key], src_val, where, issues, may_shorten=False)
@@ -175,12 +197,17 @@ def _compare_employee(rw: dict, rs_list: list[dict], w2: W2, layout: Layout, pro
         result.fields_compared += 1
     _compare_address(rw, w2, "RW", where, issues)
     for f in layout["RW"].fields:
-        if f.type != "M":
+        if f.type != "M" or f.key.startswith("box11_"):
             continue
-        expected, got = _expected_rw(w2, f.key), rw[f.key]
+        expected, got = _expected_rw(w2, f.key), _d(rw[f.key])
         result.fields_compared += 1
         if got != expected:
             issues.error(where, f"RW {f.name}: file has {got}, source has {expected}")
+    box11 = sum((_d(rw[f.key]) for f in layout["RW"].fields if f.key.startswith("box11_")), Decimal(0))
+    result.fields_compared += 1
+    if box11 != w2.box11_nonqualified:
+        issues.error(where, f"RW Box 11 nonqualified plans (457 + non-457): file has {box11}, "
+                            f"source has {w2.box11_nonqualified}")
     for key in ("statutory_employee", "retirement_plan", "third_party_sick_pay"):
         result.fields_compared += 1
         if rw[key] != ("1" if getattr(w2, key) else "0"):
@@ -207,8 +234,6 @@ def _compare_employee(rw: dict, rs_list: list[dict], w2: W2, layout: Layout, pro
         issues.error(where, f"expected one {state} RS record, found {len(mine)}")
         return
     rs, st = mine[0], lines[0]
-    if rs["ssn"] != rw["ssn"]:
-        issues.error(where, "RS SSN differs from the RW SSN before it")
     for key in ("first_name", "middle_name", "last_name", "suffix"):
         _compare_text(f"RS {key}", rs[key], getattr(w2, key), where, issues, may_shorten=False)
     _compare_address(rs, w2, "RS", where, issues)
@@ -307,14 +332,20 @@ def check_file(data: bytes | str | Path, layout: Layout, profile: dict | None = 
             rule = profile.get("account_number")
             if b["re"] is not None and source is not None and b["re"]["tax_year"] != str(source.tax_year):
                 issues.error(b["where"], f"RE tax year {b['re']['tax_year']} is not {source.tax_year}")
+            one_each = profile.get("one_state_record_per_employee", False)
             for e in b["employees"]:
                 mine = [r for r in e["rs"] if r is not None and r["state_code"] == fips]
                 if not mine:
-                    issues.warning(e["where"], f"employee has no RS record for {profile['state_name']} "
-                                               f"(state code {fips})")
+                    (issues.error if one_each else issues.warning)(
+                        e["where"], f"RW has no RS record for {profile['state_name']} (state code {fips})")
+                elif len(mine) > 1 and one_each:
+                    issues.error(e["where"], f"RW has {len(mine)} RS records for {profile['state_name']}; "
+                                             "one per employee is required")
                 for r in e["rs"]:
                     if r is None:
                         continue
+                    if e["rw"] is not None and r["ssn"] != e["rw"]["ssn"]:
+                        issues.error(e["where"], "RS SSN differs from the SSN on the RW record before it")
                     for key, want in profile.get("state_record_values", {}).items():
                         if r[key] != want:
                             issues.error(e["where"], f"RS {layout['RS'][key].name} is '{r[key]}', must be '{want}'")
@@ -327,6 +358,8 @@ def check_file(data: bytes | str | Path, layout: Layout, profile: dict | None = 
     # ---- compare with the source -----------------------------------------
     if source is not None:
         employees = [e for b in blocks for e in b["employees"]]
+        expected = [w for w in source.employees if in_state_file(w, profile)]
+        left_out = len(source.employees) - len(expected)
         if len(blocks) != 1:
             issues.error("file", f"file has {len(blocks)} employer blocks; the source has one employer")
         elif blocks[0]["re"] is not None:
@@ -335,9 +368,10 @@ def check_file(data: bytes | str | Path, layout: Layout, profile: dict | None = 
                 issues.error(blocks[0]["where"], "RE EIN does not match the source employer EIN")
             _compare_text("RE employer name", re_vals["employer_name"], source.employer.name,
                           blocks[0]["where"], issues, may_shorten=False)
-        if len(employees) != len(source.employees):
-            issues.error("file", f"file has {len(employees)} employees, source has {len(source.employees)}")
-        for e, w2 in zip(employees, source.employees):
+        if len(employees) != len(expected):
+            extra = f" ({left_out} without {profile.get('state_name')} wages left out)" if left_out else ""
+            issues.error("file", f"file has {len(employees)} employees, source has {len(expected)}{extra}")
+        for e, w2 in zip(employees, expected):
             if e["rw"] is None:
                 continue
             _compare_employee(e["rw"], [r for r in e["rs"] if r is not None], w2, layout, profile, result)

@@ -65,6 +65,21 @@ def _digits(value: Any, width: int, label: str, where: str, issues: Issues, *, s
     return re.sub(r"[\s\-]", "", str(value))
 
 
+def _zip(value: Any, label: str, where: str, issues: Issues) -> str:
+    """ZIP or ZIP+4 as 5 or 9 digits. A number cell drops leading zeros: 2134 was 02134, and
+    an 8-digit 21381234 was the ZIP+4 02138-1234 (no ZIP code starts with 000)."""
+    if isinstance(value, (int, float)):
+        text = _text(value)
+        if text.isdigit() and len(text) not in (5, 9):
+            width = 5 if len(text) < 5 else 9
+            if len(text) < 9:
+                issues.warning(where, f"{label} {text} was stored as a number, which drops leading zeros; "
+                                      f"read as {text.zfill(width)}. Check it against the source record.")
+                return text.zfill(width)
+        return text
+    return _digits(value, 5, label, where, issues)
+
+
 def _money(value: Any, label: str, where: str, issues: Issues) -> Decimal:
     if value is None or _text(value) == "":
         return Decimal(0)
@@ -132,12 +147,12 @@ def read_w2_workbook(path: str | Path, mapping: dict) -> tuple[Employer, list[W2
                 address=Address(
                     delivery=_text(get("employer_address")), city=_text(get("employer_city")),
                     state=_text(get("employer_state")).upper(),
-                    zip=_digits(get("employer_zip"), 5, "Employer ZIP", where, issues),
+                    zip=_zip(get("employer_zip"), "Employer ZIP", where, issues)[:5],
                 ),
             )
         employer = employers.get(ein)
 
-        zip_full = _digits(get("zip"), 5, "ZIP code", where, issues)
+        zip_full = _zip(get("zip"), "ZIP code", where, issues)
         w2 = W2(
             control_number=_text(get("control_number")),
             ssn=_digits(get("ssn"), 9, "SSN", where, issues, secret=True),
@@ -168,13 +183,13 @@ def read_w2_workbook(path: str | Path, mapping: dict) -> tuple[Employer, list[W2
                 issues.error(where, f"Box 12 code {code} appears twice")
             w2.box12[code] = amount
         state = _text(get("box15_state")).upper()
+        box16 = _money(get("box16_state_wages"), "Box 16", where, issues)
+        box17 = _money(get("box17_state_tax"), "Box 17", where, issues)
+        if not state and (box16 or box17):
+            issues.error(where, "Box 16/17 have state amounts but Box 15 (state) is blank")
         if state:
             state_id = _text(get("box15_state_id"))
-            w2.states.append(StateWages(
-                state=state, employer_state_id=state_id,
-                wages=_money(get("box16_state_wages"), "Box 16", where, issues),
-                tax=_money(get("box17_state_tax"), "Box 17", where, issues),
-            ))
+            w2.states.append(StateWages(state=state, employer_state_id=state_id, wages=box16, tax=box17))
             if employer is not None and state_id:
                 known = employer.state_ids.setdefault(state, state_id)
                 if known != state_id:

@@ -70,15 +70,24 @@ def cmd_w2(args) -> int:
         print("No file written.")
         return 1
 
+    # Check the exact bytes before anything reaches the disk, so a file that fails its
+    # check never sits in the folder under the name the state expects.
+    data = text.encode("ascii")
+    result = check_file(data, layout, profile, source=report)
     out = Path(args.out or profile["default_file_name"].format(year=report.tax_year))
+    if not result.ok:
+        print(format_report(result, title="Round-trip check"))
+        print(f"No file written: the round-trip check failed, so {out} was not created.")
+        return 1
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_bytes(text.encode("ascii"))
-    print(f"Wrote {out} ({len(text.encode('ascii')):,} bytes) for {profile['state_name']} "
+    out.write_bytes(data)
+    if out.read_bytes() != data:
+        print(f"error: {out} does not read back as written", file=sys.stderr)
+        return 1
+    print(f"Wrote {out} ({len(data):,} bytes) for {profile['state_name']} "
           f"({profile['agency']}, {profile['portal']})")
-
-    result = check_file(out, layout, profile, source=report)
     print(format_report(result, title="Round-trip check"))
-    return 0 if result.ok else 1
+    return 0
 
 
 def cmd_check(args) -> int:

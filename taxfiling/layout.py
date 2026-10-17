@@ -142,6 +142,11 @@ def _cents(value: Any) -> int:
     return int(d * 100)
 
 
+def _shown(f: Field, value: Any) -> str:
+    """A value as it may appear in an error message: SSN fields are never echoed."""
+    return "(value hidden)" if "ssn" in f.key else f"'{value}'"
+
+
 def format_field(f: Field, value: Any, record_type: str = "") -> str:
     where = f"{record_type}.{f.key} ({f.name}, positions {f.start}-{f.end})"
     if f.type == "blank":
@@ -157,14 +162,14 @@ def format_field(f: Field, value: Any, record_type: str = "") -> str:
         if f.case != "mixed":
             text = text.upper()
         if len(text) > f.length:
-            raise LayoutError(f"{where}: '{text}' is {len(text)} characters, field holds {f.length}")
+            raise LayoutError(f"{where}: {_shown(f, text)} is {len(text)} characters, field holds {f.length}")
         if not text.isascii():
-            raise LayoutError(f"{where}: '{text}' has non-ASCII characters")
+            raise LayoutError(f"{where}: {_shown(f, text)} has non-ASCII characters")
         return text.ljust(f.length)
     if f.type == "N":
         text = str(value)
         if not text.isdigit():
-            raise LayoutError(f"{where}: '{text}' is not all digits")
+            raise LayoutError(f"{where}: {_shown(f, text)} is not all digits")
     elif f.type == "M":
         cents = _cents(value)
         if cents < 0:
@@ -180,7 +185,7 @@ def format_field(f: Field, value: Any, record_type: str = "") -> str:
     else:
         raise LayoutError(f"{where}: unknown field type {f.type}")
     if len(text) > f.length:
-        raise LayoutError(f"{where}: {value} does not fit in {f.length} digits")
+        raise LayoutError(f"{where}: {_shown(f, value)} does not fit in {f.length} digits")
     return text.rjust(f.length, "0")
 
 
@@ -202,7 +207,7 @@ def parse_field(f: Field, raw: str) -> Any:
     if raw.strip() == "":
         return None
     if not raw.isdigit():
-        raise LayoutError(f"{f.key} (positions {f.start}-{f.end}): '{raw}' is not numeric")
+        raise LayoutError(f"{f.name} (positions {f.start}-{f.end}): {_shown(f, raw)} is not numeric")
     if f.type == "N":
         return raw
     if f.type == "M":
