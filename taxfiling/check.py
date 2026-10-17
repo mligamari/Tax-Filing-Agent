@@ -115,7 +115,7 @@ def _check_fields(rt: str, line: str, layout: Layout, where: str, issues: Issues
         issues.error(where, f"{rt} does not re-encode: {exc}")
         return values
     if again != line and again.upper() != line.upper():  # case alone is reported above
-        bad = next(f for f in rec.fields if again[f.slice] != line[f.slice])
+        bad = next(f for f in rec.fields if again[f.slice].upper() != line[f.slice].upper())
         issues.error(where, f"{rt} {bad.name} (positions {bad.start}-{bad.end}) is not padded or justified "
                             f"as the layout requires")
     return values
