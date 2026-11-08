@@ -1,0 +1,35 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: python -m pip install -e ".[test]"
+      - run: python -m pytest -q
+      - name: Rebuild the layout tables from SSA's spec text
+        run: |
+          for year in 2025 2026; do
+            python tools/build_efw2_layout.py $year "/tmp/efw2_ty$year.json"
+            cmp "/tmp/efw2_ty$year.json" "taxfiling/layouts/efw2_ty$year.json"
+          done
+      - name: Write and check the Virginia examples from scratch
+        run: |
+          for year in 2025 2026; do
+            python -m taxfiling w2 --state VA --year $year --input examples/va_$year/w2_${year}_va_synthetic.xlsx \
+              --submitter examples/va_$year/submitter.json --out "/tmp/W2 REPORT $year.txt"
+            cmp "/tmp/W2 REPORT $year.txt" "examples/va_$year/output/W2 REPORT $year.txt"
+          done

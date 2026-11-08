@@ -1,0 +1,5 @@
+# Files the tests compare byte for byte: the example outputs (CR/LF between records,
+# as the states require) and SSA's spec text (checked by SHA-256). Keep Git from
+# changing their line endings on checkout, e.g. with core.autocrlf on Windows.
+specs/ssa/*.txt -text
+examples/*/output/*.txt -text

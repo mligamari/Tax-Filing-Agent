@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tax-filing-agent"
+version = "0.1.0"
+description = "Offline writer and checker for state wage-reporting files (EFW2 now, ICESA next)"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["openpyxl>=3.1"]
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[project.scripts]
+taxfiling = "taxfiling.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["taxfiling*"]
+
+[tool.setuptools.package-data]
+taxfiling = ["layouts/*.json", "mappings/*.json", "states/*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

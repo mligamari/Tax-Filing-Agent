@@ -1,0 +1,25 @@
+{
+  "_note": "Fictional values for the synthetic Blue Ridge Precision Components example. The RA record needs the submitter's SSA Business Services Online (BSO) User ID and a contact; none of this is on a W-2.",
+  "submitter": {
+    "ein": "54-3187620",
+    "bso_user_id": "DEMO2025",
+    "name": "Blue Ridge Precision Components Inc",
+    "address": {
+      "delivery_address": "2200 Commonwealth Blvd",
+      "city": "Richmond",
+      "state": "VA",
+      "zip": "23230"
+    },
+    "contact": {
+      "name": "Jordan Payroll",
+      "phone": "804-555-0142",
+      "email": "payroll@example.com"
+    },
+    "software_code": "98",
+    "preparer_code": "L"
+  },
+  "employer": {
+    "kind_of_employer": "N",
+    "employment_code": "R"
+  }
+}
