@@ -25,9 +25,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .audit import AuditLog
-from .boundary import BoundaryViolation, Denylist, OutboundPayload, build_payload, header_problem
+from .boundary import REASONS, BoundaryViolation, Denylist, OutboundPayload, build_payload, header_problem
 from .fields import catalog
-from .profile import WorkbookProfile, profile_workbook, read_grid
+from .profile import PROFILE_LABELS, WorkbookProfile, profile_workbook, read_grid
 from .prompt import SYSTEM_PROMPT, response_schema
 from .proposal import Review, check_proposal, format_review
 
@@ -40,16 +40,21 @@ class Prepared:
 
 
 def fixed_words() -> set[str]:
-    """Every string in the program's fixed text that could equal a spreadsheet label:
-    the field catalog and the literal values in the answer schema."""
+    """Every string the program itself sends that could equal a spreadsheet label: the field
+    catalog, the keys and labels of a column profile, and the literal values in the schema."""
     words = {f["field"] for f in catalog()} | {f["description"] for f in catalog()}
-    return words | {"high", "medium", "low", "object", "string", "array"}
+    return words | PROFILE_LABELS | {"high", "medium", "low", "object", "string", "array"}
+
+
+def fixed_text() -> str:
+    """All of the program's own text that goes into a request."""
+    return "\n".join([SYSTEM_PROMPT, *sorted(fixed_words()), *REASONS])
 
 
 def prepare(path: str | Path, sheets: list[str] | None = None) -> Prepared:
     """Read the workbook and build the payload. Nothing is sent."""
     grid = read_grid(path, sheets)
-    deny = Denylist.from_grid(grid, public=fixed_words())
+    deny = Denylist.from_grid(grid, public=fixed_words(), public_text=fixed_text())
     profile = profile_workbook(grid, str(path), header_problem(deny))
     payload = build_payload(profile, deny, SYSTEM_PROMPT, catalog(), response_schema(profile))
     return Prepared(profile, deny, payload)

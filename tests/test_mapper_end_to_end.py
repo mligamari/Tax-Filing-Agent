@@ -85,3 +85,16 @@ def test_sending_needs_consent(tmp_path, capsys, monkeypatch):
 def test_committed_messy_mapping_gives_the_same_file(tmp_path, no_network):
     """The example mapping in the README (rules plus two lines added by hand)."""
     write_and_compare(MESSY_WORKBOOK.parent / "w2_2025_va_messy.mapping.json", MESSY_WORKBOOK, tmp_path)
+
+
+def test_the_payload_excerpt_in_the_readme_is_what_is_actually_sent():
+    """The README shows four lines of a real payload; each must appear verbatim in it."""
+    from taxfiling.mapper import prepare
+    readme = (MESSY_WORKBOOK.parents[2] / "README.md").read_text()
+    block = readme.split("This is the actual text sent for four columns", 1)[1].split("```text", 1)[1]
+    excerpt = [line.strip() for line in block.split("```", 1)[0].strip().splitlines()]
+    sent = {line.strip() for line in prepare(MESSY_WORKBOOK).payload.user.splitlines()}
+    assert len(excerpt) == 4
+    for line in excerpt:
+        assert line in sent, line
+

@@ -241,7 +241,7 @@ This is the actual text sent for four columns of the messy example
 ```text
 {"id": "S1.C06", "column": "F", "header": "Social Sec #", "filled": "50 of 51", "types": {"integer": 50}, "shapes": ["#"]},
 {"id": "S1.C09", "column": "I", "header": "St", "filled": "50 of 51", "types": {"text": 50}, "shapes": ["A"], "all_values_are": ["us_state_code"]},
-{"id": "S1.C13", "column": "M", "header": "Fed Wages", "filled": "50 of 51", "types": {"text": 50}, "shapes": ["$#,###.##"]},
+{"id": "S1.C13", "column": "M", "header": "Fed Wages", "filled": "50 of 51", "types": {"text": 50}, "shapes": ["$#,###.##", "$#,###.#", "$#,###"]},
 {"id": "S1.C35", "column": "AI", "header": "State Acct #", "filled": "50 of 51", "types": {"text": 50}, "shapes": ["##-#########A-###"]},
 ```
 
@@ -254,19 +254,23 @@ whole payload, so you can read every byte before deciding to send it.
 The rule is enforced by code that does not trust the code before it:
 
 1. **Shapes by construction.** The profiler ([`mapper/profile.py`](taxfiling/mapper/profile.py))
-   never copies a cell value into its output, only its shape.
+   never copies a cell value into its output, only its shape: ASCII punctuation is the only
+   character of a value that can appear in one.
 2. **Check 1, on the payload.** [`build_payload()`](taxfiling/mapper/boundary.py) is the only
    way to make an `OutboundPayload` (the constructor refuses to run without it), and it
    checks every string against the workbook itself: nothing shaped like an SSN, no run of
-   5+ digits, no e-mail or phone number, no string equal to a cell value, no cell value
-   that mixes letters and 4+ digits (a street address), no 4-digit number that is the end
-   of a 9-digit cell. A header or sheet name that fails is withheld before this point.
+   5+ digits, no e-mail or phone number, no string equal to a cell value, no cell value of
+   two or more words anywhere in it (a full name in a header), no cell value that mixes
+   letters and 4+ digits (a street address), no 4-digit number that is the end of a
+   9-digit cell. A header or sheet name that fails is withheld before this point.
 3. **Check 2, on the wire.** The model providers ([`mapper/providers.py`](taxfiling/mapper/providers.py))
    install a request hook in the HTTP client. After the SDK has turned the request into
    bytes, and before any byte is sent, the hook checks the host (only `api.anthropic.com`
    over HTTPS for Claude; only `localhost`/`127.0.0.1`/`::1` for a local model), the path
-   (`POST /v1/messages` only) and the body (the same checks as step 2). A failure stops the
-   request; nothing is retried. Setting `ANTHROPIC_BASE_URL` cannot redirect it.
+   (`POST /v1/messages` only) and the body: the same checks as step 2, on every string in
+   the request, including each header inside the user message, which travels as JSON
+   inside a string. A failure stops the request; nothing is retried. Setting
+   `ANTHROPIC_BASE_URL` cannot redirect it.
 4. **Audit log of the exact bytes.** Only after check 2 passes is the body written to
    `mapping-audit.jsonl`, with its SHA-256, followed by the model's answer. HTTP headers,
    where the API key travels, are never logged; a blocked request is logged with its
@@ -323,9 +327,10 @@ correct answer gives the same result.
   workbooks, no SSN (dashed or not), last four of an SSN, name, street, city, ZIP, EIN, state
   account number or amount appears in the payload, and it has no run of 5+ digits. With
   shape masking switched off, or a bug that copies a value into the profile, the payload is
-  refused, and the error message itself quotes no data. Headers holding a name, phone number
-  or e-mail, and a sheet named after an SSN, are withheld. Each kind of data is blocked by
-  the wire check, including in JSON keys and numbers.
+  refused, and the error message itself quotes no data. Headers holding a name (alone or
+  inside a longer header), phone number or e-mail, and a sheet named after an SSN, are
+  withheld. Each kind of data is blocked by the wire check, including in JSON keys,
+  numbers and headers inside the user message.
 * [`tests/test_mapper_providers.py`](tests/test_mapper_providers.py) (against a mock HTTP
   transport, with sockets disabled): the bytes that reach the transport are clean and equal
   the audit log entry; the API key is not in the log; a request built by calling the SDK

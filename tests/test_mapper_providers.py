@@ -93,6 +93,19 @@ def test_the_wire_guard_stops_a_request_that_skips_build_payload(messy, tmp_path
     assert "request_blocked" in text and w.ssn[-4:] not in text and w.last_name not in text
 
 
+def test_missing_credentials_send_nothing(messy, monkeypatch, tmp_path):
+    for var in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_PROFILE", "ANTHROPIC_IDENTITY_TOKEN",
+                "ANTHROPIC_IDENTITY_TOKEN_FILE", "ANTHROPIC_FEDERATION_RULE_ID"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    api = FakeAPI("{}")
+    provider = ClaudeProvider(messy.deny, AuditLog(tmp_path / "audit.jsonl"), transport=api.transport())
+    with pytest.raises(ProviderError, match="no Claude credentials"):
+        provider.propose(messy.payload, messy.profile)
+    assert api.requests == [] and not (tmp_path / "audit.jsonl").exists()
+
+
 def test_provider_accepts_only_a_checked_payload(messy):
     provider = ClaudeProvider(messy.deny, AuditLog(None), api_key=FAKE_KEY, transport=FakeAPI("{}").transport())
     with pytest.raises(TypeError, match="OutboundPayload"):
@@ -111,6 +124,18 @@ def test_claude_host_cannot_be_redirected(messy, monkeypatch, tmp_path):
         moved.messages.create(model="claude-opus-5-5", max_tokens=10, messages=[{"role": "user", "content": "hi"}])
     assert "not allowed" in str(info.value.__cause__)
     assert len(api.requests) == 1
+
+
+def test_a_redirect_cannot_send_the_body_elsewhere(messy):
+    seen = []
+
+    def handler(request):
+        seen.append(request.url.host)
+        return httpx.Response(307, headers={"location": "https://collector.example.net/v1/messages"})
+    provider = ClaudeProvider(messy.deny, AuditLog(None), api_key=FAKE_KEY, transport=httpx.MockTransport(handler))
+    with pytest.raises(ProviderError, match="307"):
+        provider.propose(messy.payload, messy.profile)
+    assert seen == ["api.anthropic.com"]
 
 
 def test_local_model_must_be_on_this_computer(messy):

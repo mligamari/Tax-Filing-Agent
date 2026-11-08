@@ -128,8 +128,11 @@ class _MessagesProvider:
         self.fallbacks = fallbacks
         self._anthropic = anthropic
         hook = wire_guard(self.name, deny, audit, allow_host, require_https)
+        # Redirects are not followed, so a 3xx answer cannot send the body on to another host
+        # (the hook would block a request to another host anyway).
         http_client = anthropic.DefaultHttpxClient(
-            event_hooks={"request": [hook]}, **({"transport": transport} if transport else {}))
+            event_hooks={"request": [hook]}, follow_redirects=False,
+            **({"transport": transport} if transport else {}))
         kwargs = {"api_key": api_key} if api_key else {}
         self.client = anthropic.Anthropic(base_url=base_url, http_client=http_client,
                                          max_retries=0, **kwargs)   # one request per run, one log entry
@@ -174,6 +177,12 @@ class _MessagesProvider:
             raise ProviderError("the API key was refused (set ANTHROPIC_API_KEY or run `ant auth login`)") from None
         except anthropic.APIStatusError as exc:
             raise ProviderError(f"{self.endpoint} answered HTTP {exc.status_code}: {exc.message}") from None
+        except TypeError as exc:
+            # The SDK raises this before building the request when it finds no credentials.
+            if "authentication" not in str(exc).lower():
+                raise
+            raise ProviderError("no Claude credentials found: set ANTHROPIC_API_KEY or run `ant auth login`. "
+                                "Nothing was sent.") from None
         if response.stop_reason == "refusal":
             raise ProviderError("the model declined the request")
         if response.stop_reason == "max_tokens":

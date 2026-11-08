@@ -1,9 +1,11 @@
 """The audit log: one JSON line per model request, holding the exact bytes that were sent.
 
 For a cloud or local model the request body is captured inside the HTTP client after
-the boundary check passes, so the log shows what actually went over the wire, not
-what the program meant to send. HTTP headers (where the API key travels) are never
-logged. A blocked request is logged with the reason only, never with its body.
+the boundary check passes, just before it is handed to the network, so the log shows
+what actually went over the wire, not what the program meant to send. (If the network
+then fails, the entry has no response after it.) HTTP headers, where the API key
+travels, are never logged. A blocked request is logged with the reason only, never
+with its body.
 """
 from __future__ import annotations
 

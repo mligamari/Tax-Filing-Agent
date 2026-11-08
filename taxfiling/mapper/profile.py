@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import re
+import string
 from collections import Counter
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -38,6 +39,16 @@ VOCABULARIES = {
     "us_state_code": US_STATES,
     "box12_code": W2_BOX12 | {"TT"},
     "yes_no_flag": YES_NO,
+}
+
+
+# Every key, type name, shape word and label a column profile can contain. They are the
+# program's own words, so a cell that happens to say "Date" or "Text" is not treated as data.
+PROFILE_LABELS = {
+    "id", "column", "header", "header_withheld", "filled", "types", "shapes", "all_values_are",
+    "name", "name_withheld", "header_row", "columns", "sheets", "fields", "field", "description",
+    "required", "workbook", "text", "integer", "decimal", "date", "boolean", "TRUE/FALSE",
+    "blank header", *VOCABULARIES,
 }
 
 
@@ -81,7 +92,8 @@ def detect_header_row(rows: list[tuple[Any, ...]]) -> int | None:
 
 
 def shape(value: Any) -> str:
-    """A cell's pattern with no letters or digits of the value left in it."""
+    """A cell's pattern with no letter, digit or other character of the value left in it,
+    except ASCII punctuation."""
     if isinstance(value, bool):
         return "TRUE/FALSE"
     if isinstance(value, (_dt.datetime, _dt.date)):
@@ -98,17 +110,31 @@ def shape(value: Any) -> str:
         # An amount written as text ($82,297.12, 82297.12): show its format, not its size.
         return ("$" if money.group(2) else "") + ("#,###" if "," in text else "#") + \
             ("." + "#" * min(len(money.group(4)) - 1, 4) if money.group(4) else "")
+    # Character by character: a run of letters becomes A, a or Aa, a digit becomes #, any
+    # whitespace one space, ASCII punctuation stays, and anything else becomes ?. So no letter,
+    # digit or other character of the value can reach the output.
     out: list[str] = []
-    for run in re.finditer(r"[^\W\d_]+|\d|\s+|.", text):
-        tok = run.group(0)
-        if tok.isdigit():
+    letters = ""
+
+    def end_of_letters() -> None:
+        nonlocal letters
+        if letters:
+            out.append("A" if letters.isupper() else "a" if letters.islower() else "Aa")
+            letters = ""
+
+    for ch in text:
+        if ch.isalpha():
+            letters += ch
+            continue
+        end_of_letters()
+        if ch.isdigit() or ch.isnumeric():
             out.append("#")
-        elif tok.isalpha():
-            out.append("A" if tok.isupper() else "a" if tok.islower() else "Aa")
-        elif tok.isspace():
-            out.append(" ")
+        elif ch.isspace():
+            if not out or out[-1] != " ":
+                out.append(" ")
         else:
-            out.append(tok)
+            out.append(ch if ch in string.punctuation else "?")
+    end_of_letters()
     text = "".join(out)
     return text if len(text) <= MAX_SHAPE_LENGTH else text[:MAX_SHAPE_LENGTH] + "..."
 

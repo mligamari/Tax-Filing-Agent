@@ -4,7 +4,7 @@
     "provider": "none",
     "model": null,
     "endpoint": "no network: rules in taxfiling/mapper/heuristic.py",
-    "payload_sha256": "91f1993d12a26fdee04db76df9571f90f39e881ffc9e2df8979d57f5e91a9aa9",
+    "payload_sha256": "68d2e407fabcedb7fc0e9218960b6e1bc3530cedbf5467b24ba5f5bdfcbe83a8",
     "audit_log": "mapping-audit.jsonl",
     "warnings": [],
     "missing_required": [],
