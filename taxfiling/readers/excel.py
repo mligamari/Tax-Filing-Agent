@@ -126,7 +126,11 @@ def read_w2_workbook(path: str | Path, mapping: dict) -> tuple[Employer, list[W2
     headers = [_text(h) for h in next(rows)]
     index = {h: i for i, h in enumerate(headers) if h}
 
-    cols = mapping["columns"]
+    # Columns listed under "optional" may be absent (for example Box 14b, which only the 2026
+    # form has); every other mapped column must be in the sheet.
+    optional = set(mapping.get("optional", []))
+    cols = {field: header for field, header in mapping["columns"].items()
+            if header in index or field not in optional}
     missing = sorted({h for h in cols.values() if h not in index}
                      | {h for pair in mapping.get("box12", []) for h in pair.values() if h not in index})
     if missing:

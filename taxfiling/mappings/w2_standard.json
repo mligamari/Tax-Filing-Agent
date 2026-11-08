@@ -2,6 +2,8 @@
   "description": "Column mapping for the sample W-2 workbook layout (one row per employee, one column per W-2 box). The planned AI step will propose a file like this from column headers alone; the code below applies it to the full rows locally.",
   "sheet": "W-2 Data",
   "header_row": 1,
+  "optional": ["middle_name", "suffix", "box7_ss_tips", "box8_allocated_tips", "box10_dependent_care",
+               "box11_nonqualified", "statutory_employee", "third_party_sick_pay", "box14b_tipped_occupation"],
   "columns": {
     "control_number": "Control Number (d)",
     "ssn": "Employee SSN (a)",
