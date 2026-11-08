@@ -48,7 +48,7 @@ def test_no_file_is_left_behind_when_the_check_fails(tmp_path, monkeypatch, caps
         result.issues.error("test", "forced failure")
         return result
     monkeypatch.setattr(cli, "check_file", failing_check)
-    out = tmp_path / "W2 REPORT 2026.txt"
+    out = tmp_path / "W2 REPORT 2025.txt"
     code = cli.main(["w2", "--state", "VA", "--input", str(VA_WORKBOOK), "--submitter", str(VA_SUBMITTER),
                      "--out", str(out)])
     assert code == 1
@@ -96,7 +96,8 @@ def test_box_11_split_in_the_file_is_compared_as_one_amount(va_report, layout, v
     va_report.employees[0].box11_nonqualified = Decimal("50.00")
     lines = text.split("\r\n")
     lines[2] = put(put(lines[2], 353, "00000003000"), 375, "00000002000")  # 30.00 + 20.00
-    lines[-2] = put(put(lines[-2], 235, "000000000003000"), 265, "000000000002000")  # RT totals
+    rt = next(i for i, line in enumerate(lines) if line.startswith("RT"))
+    lines[rt] = put(put(lines[rt], 235, "000000000003000"), 265, "000000000002000")  # RT totals
     result = check_file("\r\n".join(lines).encode(), layout, va_profile, source=va_report)
     assert result.ok, errors(result)
     va_report.employees[0].box11_nonqualified = Decimal("49.00")
@@ -112,10 +113,14 @@ def test_employee_without_virginia_wages_is_left_out(va_report, layout, va_profi
     assert result.ok, errors(result)
 
 
-def test_box_12_field_names_match_their_codes(layout):
-    for f in layout["RW"].fields:
-        if f.key.startswith("code_"):
-            assert f"(Box 12 {f.key[5:]})" in f.name, f.key
+def test_box_12_field_names_match_their_codes(layout, layout_2026):
+    for lay in (layout, layout_2026):
+        for rt in ("RW", "RO"):
+            for f in lay[rt].fields:
+                if f.key.startswith("code_"):
+                    codes = f.key[5:].split("_")
+                    named = f"(Code {codes[0]})" if len(codes) == 1 else f"(Codes {' and '.join(codes)})"
+                    assert named in f.name.replace("P )", "P)"), (rt, f.key, f.name)
 
 
 def test_zip_values_that_cannot_be_right_are_errors(tmp_path):
@@ -150,7 +155,7 @@ def test_a_file_with_no_employees_is_refused(va_report, layout, va_profile):
 def test_an_address_cut_far_short_of_the_field_is_an_error(va_report, layout, va_profile):
     text, _ = build_efw2(va_report, layout, va_profile)
     lines = text.split("\r\n")
-    lines[2] = put(lines[2], 88, "4020".ljust(22))  # source: 4020 MONUMENT AVE
+    lines[2] = put(lines[2], 88, lines[2][87:109].split()[0].ljust(22))  # "9142 MONUMENT AVE" cut to "9142"
     assert "street address" in errors(check_file("\r\n".join(lines).encode(), layout, va_profile, source=va_report))
 
 
@@ -163,7 +168,7 @@ def test_a_missing_rs_is_reported_once(va_report, layout, va_profile):
 
 
 def test_an_older_file_is_called_out_when_the_check_fails(tmp_path, monkeypatch, capsys):
-    out = tmp_path / "W2 REPORT 2026.txt"
+    out = tmp_path / "W2 REPORT 2025.txt"
     out.write_text("older run")
 
     def failing_check(*args, **kwargs):

@@ -12,12 +12,15 @@ Checks, in order:
   2. Record order (RA, RE, RW [RO] [RS...], RT [RU] [RV], ..., RF).
   3. Every field: constants, blanks, numeric fields, justification. Each record
      is re-encoded from its parsed values and must match byte for byte.
-  4. Totals: RT counts and sums against the RW records, RF count.
+  4. Totals: RT counts and sums against the RW records, RU against the RO
+     records (an RU is required when there is an RO, and neither may hold only
+     zeros), RF count.
   5. State rules from the state profile (RS state codes, account number format,
-     one RS per employee).
+     one RS per employee, fields the state requires).
   6. If the source data is given: every employee, name, SSN and amount in the
-     file matches the source, and anything in the source that the file does not
-     carry is listed.
+     file matches the source (including the RO record: an employee with RO
+     amounts must have one, and one without must not), and anything in the
+     source that the file does not carry is listed.
 """
 from __future__ import annotations
 
@@ -45,7 +48,7 @@ NEXT = {
     "RV": {"RE", "RF"},
     "RF": set(),
 }
-OPTIONAL_UNCHECKED = {"RO", "RU", "RV"}
+STATE_DEFINED = {"RV"}  # SSA leaves the RV record's content to each state
 
 
 @dataclass
@@ -129,12 +132,15 @@ def _norm(text: str) -> str:
     return re.sub(r"\s+", " ", (text or "").upper()).strip()
 
 
-def _expected_rw(w2: W2, key: str) -> Decimal:
-    """What an RW money field should hold, worked out from the field key itself.
-    (The two Box 11 fields are compared as a pair, since the source has one Box 11 amount.)"""
+def _expected(w2: W2, key: str) -> Decimal:
+    """What a money field should hold, worked out from the field key itself: code_DD is Box 12 DD,
+    code_A_B is codes A and B added together, box8_allocated_tips is Box 8, and a field the source has
+    nothing for (Puerto Rico amounts, for example) must be zero. The two Box 11 fields are compared as
+    a pair elsewhere, since the source has one Box 11 amount."""
     if key.startswith("code_"):
-        return w2.box12.get(key[5:], Decimal(0))
-    return getattr(w2, key)
+        return sum((w2.box12.get(code, Decimal(0)) for code in key[5:].split("_")), Decimal(0))
+    value = getattr(w2, key, None)
+    return value if isinstance(value, Decimal) else Decimal(0)
 
 
 def _fits(written: str, source: str, width: int) -> bool:
@@ -187,14 +193,14 @@ def _compare_address(rec: dict, w2: W2, rt: str, layout: Layout, where: str, iss
         issues.error(where, f"{rt} street address '{_norm(f'{delivery} {location}')}' does not match "
                             f"source '{src}'")
     elif match == "shortened":
-        issues.warning(where, f"{rt} street address shortened to fit: '{src}' written as "
-                              f"'{delivery}' + '{location}'")
+        written = f"'{delivery}' + location '{location}'" if location else f"'{delivery}'"
+        issues.warning(where, f"{rt} street address shortened to fit: '{src}' written as {written}")
     _compare_text(f"{rt} city", rec["city"], w2.address.city, where, issues, width=layout[rt]["city"].length)
     for key, src_val in (("state", w2.address.state), ("zip", w2.address.zip), ("zip_ext", w2.address.zip_ext)):
         _compare_text(f"{rt} {key}", rec[key], src_val, where, issues)
 
 
-def _compare_employee(rw: dict, rs_list: list[dict], w2: W2, layout: Layout, profile: dict,
+def _compare_employee(rw: dict, ro: dict | None, rs_list: list[dict], w2: W2, layout: Layout, profile: dict,
                       result: CheckResult) -> None:
     issues, where = result.issues, w2.where()
     if rw["ssn"] != w2.ssn:
@@ -208,7 +214,7 @@ def _compare_employee(rw: dict, rs_list: list[dict], w2: W2, layout: Layout, pro
     for f in layout["RW"].fields:
         if f.type != "M" or f.key.startswith("box11_"):
             continue
-        expected, got = _expected_rw(w2, f.key), _d(rw[f.key])
+        expected, got = _expected(w2, f.key), _d(rw[f.key])
         result.fields_compared += 1
         if got != expected:
             issues.error(where, f"RW {f.name}: file has {got}, source has {expected}")
@@ -222,13 +228,38 @@ def _compare_employee(rw: dict, rs_list: list[dict], w2: W2, layout: Layout, pro
         if rw[key] != ("1" if getattr(w2, key) else "0"):
             issues.error(where, f"RW {key} indicator is {rw[key]}, source says {getattr(w2, key)}")
 
-    rw_codes = {f.key[5:] for f in layout["RW"].fields if f.key.startswith("code_")}
+    if "tipped_occupation_primary" in layout["RW"]:
+        written = " ".join(c for c in (rw["tipped_occupation_primary"], rw["tipped_occupation_secondary"]) if c)
+        source_codes = " ".join(re.split(r"[\s,;/]+", (w2.box14b_tipped_occupation or "").strip())).strip()
+        result.fields_compared += 1
+        if written != source_codes:
+            issues.error(where, f"RW Box 14b tipped occupation code(s) '{written}' do not match source "
+                                f"'{source_codes}'")
+    elif w2.box14b_tipped_occupation:
+        issues.warning(where, f"Box 14b '{w2.box14b_tipped_occupation}' is in the source but this layout has no "
+                              "field for it")
+
+    in_file = {code for rt in ("RW", "RO") if rt in layout.records
+               for f in layout[rt].fields if f.key.startswith("code_") for code in f.key[5:].split("_")}
     for code, amount in sorted(w2.box12.items()):
-        if code not in rw_codes and amount:
-            issues.warning(where, f"Box 12 {code} {amount} is in the source but not in this file "
-                                  "(it belongs in the RO record)")
-    if w2.box8_allocated_tips:
-        issues.warning(where, f"Box 8 {w2.box8_allocated_tips} is in the source but not in this file")
+        if code not in in_file and amount:
+            issues.warning(where, f"Box 12 {code} {amount} is in the source but this layout has no field for it")
+    if "RO" in layout.records and "RO" in profile.get("employee_records", ["RW", "RO"]):
+        money = [f for f in layout["RO"].fields if f.type == "M"]
+        expected_ro = {f.key: _expected(w2, f.key) for f in money}
+        if ro is None:
+            if any(expected_ro.values()):
+                wanted = ", ".join(f"{layout['RO'][k].name} {v}" for k, v in expected_ro.items() if v)
+                issues.error(where, f"no RO record, but the source has amounts that go in one: {wanted}")
+        elif not any(expected_ro.values()):
+            issues.error(where, "RO record present, but the source has no amounts that go in one")
+        else:
+            for f in money:
+                result.fields_compared += 1
+                if _d(ro[f.key]) != expected_ro[f.key]:
+                    issues.error(where, f"RO {f.name}: file has {_d(ro[f.key])}, source has {expected_ro[f.key]}")
+    elif w2.box8_allocated_tips:
+        issues.warning(where, f"Box 8 {w2.box8_allocated_tips} is in the source but this layout has no RO record")
 
     state = profile.get("state")
     if not state:
@@ -285,11 +316,18 @@ def check_file(data: bytes | str | Path, layout: Layout, profile: dict | None = 
         if len(line) != layout.record_length:
             parsed.append((rt, None, where))
             continue
-        if rt in OPTIONAL_UNCHECKED or rt not in layout.records:
-            issues.warning(where, f"{rt} record present; its layout is not loaded, so its fields are not checked")
+        if rt in STATE_DEFINED or rt not in layout.records:
+            why = "its content is defined by the state" if rt in STATE_DEFINED else "its layout is not loaded"
+            issues.warning(where, f"{rt} record present; {why}, so its fields are not checked")
             parsed.append((rt, None, where))
             continue
-        parsed.append((rt, _check_fields(rt, line, layout, where, issues), where))
+        if rt in ("RO", "RU") and not line[2:].replace("0", "").strip():
+            issues.error(where, f"{rt} record holds only zeros and blanks; SSA says not to write it")
+        values = _check_fields(rt, line, layout, where, issues)
+        for key in profile.get("required_fields", {}).get(rt, []):
+            if values is not None and values.get(key) in (None, ""):
+                issues.error(where, f"{rt} {layout[rt][key].name} is blank; {profile['state_name']} requires it")
+        parsed.append((rt, values, where))
     if prev != "RF":
         issues.error("file", "last record must be RF")
     if result.record_counts["RW"] == 0:
@@ -303,17 +341,21 @@ def check_file(data: bytes | str | Path, layout: Layout, profile: dict | None = 
     block: dict | None = None
     for rt, values, where in parsed:
         if rt == "RE":
-            block = {"re": values, "where": where, "employees": [], "rt": None}
+            block = {"re": values, "where": where, "employees": [], "rt": None, "ru": None}
             blocks.append(block)
         elif block is None:
             continue
         elif rt == "RW":
-            block["employees"].append({"rw": values, "rs": [], "where": where})
+            block["employees"].append({"rw": values, "ro": None, "has_ro": False, "rs": [], "where": where})
             all_rw += 1
+        elif rt == "RO" and block["employees"]:
+            block["employees"][-1].update(ro=values, has_ro=True)
         elif rt == "RS" and block["employees"]:
             block["employees"][-1]["rs"].append(values)
         elif rt == "RT":
             block["rt"] = (values, where)
+        elif rt == "RU":
+            block["ru"] = (values, where)
         elif rt == "RF" and values is not None:
             if values["rw_count"] is None or int(values["rw_count"]) != all_rw:
                 issues.error(where, f"RF says {values['rw_count']} RW records, file has {all_rw}")
@@ -337,6 +379,26 @@ def check_file(data: bytes | str | Path, layout: Layout, profile: dict | None = 
             result.totals[f.key] = result.totals.get(f.key, Decimal(0)) + written
             if written != computed:
                 issues.error(where, f"RT {f.name} is {written}, the RW records add up to {computed}")
+
+        n_ro = sum(1 for e in b["employees"] if e["has_ro"])
+        ros = [e["ro"] for e in b["employees"] if e["ro"] is not None]
+        if b["ru"] is None:
+            if n_ro:
+                issues.error(where, f"employer block has {n_ro} RO record(s) but no RU record; SSA requires one")
+        elif not n_ro:
+            issues.error(b["ru"][1], "RU record without any RO records")
+        elif b["ru"][0] is not None:
+            ru_values, ru_where = b["ru"]
+            if int(ru_values["ro_count"] or 0) != n_ro:
+                issues.error(ru_where, f"RU says {int(ru_values['ro_count'] or 0)} RO records, block has {n_ro}")
+            for f in layout["RU"].fields:
+                if f.type != "M":
+                    continue
+                computed = sum((_d(r[f.sum_of]) for r in ros), Decimal(0)) if f.sum_of else Decimal(0)
+                written = _d(ru_values[f.key])
+                result.totals[f.key] = result.totals.get(f.key, Decimal(0)) + written
+                if written != computed:
+                    issues.error(ru_where, f"RU {f.name} is {written}, the RO records add up to {computed}")
 
         # ---- state rules -------------------------------------------------
         if profile.get("state_record"):
@@ -391,13 +453,15 @@ def check_file(data: bytes | str | Path, layout: Layout, profile: dict | None = 
         for e, w2 in zip(employees, expected):
             if e["rw"] is None:
                 continue
-            _compare_employee(e["rw"], [r for r in e["rs"] if r is not None], w2, layout, profile, result)
+            _compare_employee(e["rw"], e["ro"], [r for r in e["rs"] if r is not None], w2, layout, profile, result)
     return result
 
 
 def format_report(result: CheckResult, title: str = "Check") -> str:
     out = [f"{title}: {'PASSED' if result.ok else 'FAILED'}"]
-    counts = ", ".join(f"{rt} {n}" for rt, n in result.record_counts.items())
+    order = ["RA", "RE", "RW", "RO", "RS", "RT", "RU", "RV", "RF"]
+    ranked = sorted(result.record_counts.items(), key=lambda kv: order.index(kv[0]) if kv[0] in order else 99)
+    counts = ", ".join(f"{rt} {n}" for rt, n in ranked)
     out.append(f"  Records: {counts}")
     if result.employees_compared:
         out.append(f"  Compared with source: {result.employees_compared} employees, "

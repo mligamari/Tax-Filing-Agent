@@ -44,6 +44,7 @@ class Field:
     count_of: str | None = None
     sources: tuple[str, ...] = ()
     notes: str = ""
+    page: int | None = None  # page of the published spec that defines the field
 
     @property
     def length(self) -> int:
@@ -83,6 +84,8 @@ class Layout:
     records: dict[str, RecordLayout]
     sources: dict[str, dict]
     tax_year: int | None = None
+    # Box 12 code -> {"description", "record", "key"}; record/key are None for codes the file has no field for.
+    box12_codes: dict[str, dict] = field(default_factory=dict)
 
     def __getitem__(self, record_type: str) -> RecordLayout:
         return self.records[record_type]
@@ -95,6 +98,10 @@ class Layout:
                 if not f.verified or f.sources == ("recall",):
                     out.append((rt, f))
         return out
+
+
+def available_layouts() -> list[str]:
+    return sorted(p.stem for p in LAYOUT_DIR.glob("*.json"))
 
 
 def load_layout(name_or_path: str | Path) -> Layout:
@@ -110,6 +117,7 @@ def load_layout(name_or_path: str | Path) -> Layout:
                 required=f.get("required") == "Y", value=f.get("value"), case=f.get("case", "upper"),
                 empty=f.get("empty", "zero"), verified=f.get("verified", True), sum_of=f.get("sum_of"),
                 count_of=f.get("count_of"), sources=tuple(f.get("sources", ())), notes=f.get("notes", ""),
+                page=f.get("page"),
             )
             for f in rec["fields"]
         ]
@@ -117,7 +125,7 @@ def load_layout(name_or_path: str | Path) -> Layout:
     layout = Layout(
         format=data["format"], title=data.get("title", ""), record_length=data["record_length"],
         line_ending=data.get("line_ending", "\r\n"), records=records, sources=data.get("sources", {}),
-        tax_year=data.get("tax_year"),
+        tax_year=data.get("tax_year"), box12_codes=data.get("box12_codes", {}),
     )
     check_layout(layout)
     return layout
@@ -211,7 +219,7 @@ def parse_field(f: Field, raw: str) -> Any:
     if f.type == "N":
         return raw
     if f.type == "M":
-        return Decimal(int(raw)) / 100
+        return Decimal(int(raw)).scaleb(-2)  # keeps two decimals: 985000 -> 9850.00
     if f.type == "MW":
         return Decimal(int(raw))
     raise LayoutError(f"{f.key}: unknown field type {f.type}")

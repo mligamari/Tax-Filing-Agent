@@ -1,16 +1,19 @@
 """EFW2 (SSA W-2 wage file) builder.
 
 This module decides which value goes in which field. Positions, widths and
-padding come from the layout table (layouts/efw2_ty2026.json) and are applied by
-taxfiling.layout, so a new tax year is a new table, not new code.
+padding come from the layout table for the tax year (layouts/efw2_ty2025.json,
+efw2_ty2026.json), which is built from SSA's own specification text, and are
+applied by taxfiling.layout. A new tax year is a new table, not new code.
 
-Record order written: RA, RE, then for each employee RW followed by the state's
-RS record, then RT and RF. RO/RU (Box 8, Box 12 codes kept only in RO) are not
-written yet: their TY2026 layout has not been verified. Any such amount in the
-input is reported as a warning naming the employee and code.
+Records written: RA, RE, then for each employee RW, an RO when the employee has
+amounts that SSA puts in the RO record (Box 8, and Box 12 codes such as T or
+TT), the state's RS record, then RT, an RU when any RO was written, and RF.
 
-Which Box 12 codes have an RW field comes from the layout table (fields named
-code_<CODE>), so a new code in a later year's table needs no change here.
+Which Box 12 code goes in which field comes from the layout: fields named
+code_<CODE> (code_A_B holds codes A and B added together), checked against the
+spec's Appendix E when the table is built. A code that SSA's file has no field
+for in that year (J, K, L and P before 2026) is reported as a warning; a code
+that is not a W-2 code for that year (TT in 2025) is an error.
 """
 from __future__ import annotations
 
@@ -23,9 +26,14 @@ from ..layout import Layout, LayoutError, encode_record
 from ..model import W2, Address, WageReport
 from ..states import in_state_file
 
-# Valid 2026 Box 12 codes that have no RW field: they go in the RO record (or nowhere in EFW2),
-# which this writer does not produce yet.
-RO_BOX12 = {"A", "B", "J", "K", "L", "M", "N", "P", "R", "S", "T", "Z", "EE", "GG", "HH", "II", "TA", "TP", "TT"}
+# Box 12 codes on the W-2 form in years whose layout has no Appendix E chart (fallback only).
+W2_BOX12 = {"A", "B", "C", "D", "E", "F", "G", "H", "J", "K", "L", "M", "N", "P", "Q", "R", "S", "T", "V", "W",
+            "Y", "Z", "AA", "BB", "DD", "EE", "FF", "GG", "HH", "II"}
+
+
+def box12_codes_in(key: str) -> list[str]:
+    """code_D -> ["D"]; code_A_B -> ["A", "B"]; any other key -> []."""
+    return key[5:].split("_") if key.startswith("code_") else []
 
 # Where a secondary unit (Apt 4B, Suite 200, # 12) starts in a street address.
 UNIT_START = re.compile(r"\s+(?=(?:(?:APT|APARTMENT|STE|SUITE|UNIT|RM|ROOM|FL|FLOOR|BLDG|LOT|TRLR|SPC|DEPT)\b|#))",
@@ -39,7 +47,15 @@ class Efw2Builder:
         self.issues = Issues()
         self.records: list[tuple[str, dict[str, Any]]] = []
         self._people: dict[int, dict[str, Any]] = {}
-        self.rw_box12 = {f.key[5:]: f.key for f in layout["RW"].fields if f.key.startswith("code_")}
+        self.year = layout.tax_year
+        # Box 12 code -> (record type, field key). Codes A and B share one field before 2026.
+        self.box12_fields: dict[str, tuple[str, str]] = {}
+        for rt in ("RW", "RO"):
+            if rt in layout.records:
+                for f in layout[rt].fields:
+                    for code in box12_codes_in(f.key):
+                        self.box12_fields[code] = (rt, f.key)
+        self.employee_records = profile.get("employee_records", ["RW", "RO"])
 
     # ---- helpers -------------------------------------------------------
     def _fit(self, value: str, record: str, key: str, where: str, *, truncate: bool = False) -> str:
@@ -128,36 +144,87 @@ class Efw2Builder:
         self._people[id(w2)] = values
         return dict(values)
 
+    def _box12(self, w2: W2, record: str) -> dict[str, Decimal]:
+        """Box 12 amounts for one record, by field key: every code field present, zero if unused."""
+        values: dict[str, Decimal] = {}
+        for code, (rt, key) in self.box12_fields.items():
+            if rt == record:
+                values[key] = values.get(key, Decimal(0)) + w2.box12.get(code, Decimal(0))
+        return values
+
+    def _note_unwritten(self, w2: W2) -> None:
+        """Errors and warnings for amounts in the input that the file has no place for."""
+        where, year = w2.where(), self.year
+        for code, amount in w2.box12.items():
+            if code in self.box12_fields:
+                rt, _ = self.box12_fields[code]
+                if rt == "RO" and "RO" not in self.employee_records and amount:
+                    self.issues.warning(where, f"Box 12 code {code} ({amount}) belongs in the RO record, which "
+                                               f"this {self.profile['state_name']} profile leaves out")
+                continue
+            listed = self.layout.box12_codes.get(code)
+            if listed is not None or (not self.layout.box12_codes and code in W2_BOX12):
+                if amount:
+                    about = f" ({listed['description']})" if listed else ""
+                    self.issues.warning(where, f"Box 12 code {code}{about} {amount}: SSA's {year} EFW2 file has "
+                                               "no field for this code, so it is not in the file")
+            else:
+                self.issues.error(where, f"Box 12 code '{code}' is not a {year} Form W-2 code")
+        ro = self.layout.records.get("RO")
+        if w2.box8_allocated_tips and (ro is None or "box8_allocated_tips" not in ro):
+            self.issues.warning(where, f"Box 8 allocated tips ({w2.box8_allocated_tips}) have no field in this "
+                                       "layout and are not written")
+        if w2.box14b_tipped_occupation and "tipped_occupation_primary" not in self.layout["RW"]:
+            self.issues.warning(where, f"Box 14b tipped occupation code '{w2.box14b_tipped_occupation}' is not part "
+                                       f"of SSA's {year} EFW2 file (it starts with tax year 2026); not written")
+
+    def _tipped_occupation(self, w2: W2, values: dict[str, Any]) -> None:
+        """2026 and later: Box 14b codes go in RW 490-495 (primary, secondary)."""
+        if "tipped_occupation_primary" not in self.layout["RW"]:
+            return
+        where = w2.where()
+        text = (w2.box14b_tipped_occupation or "").strip()
+        codes = [c for c in re.split(r"[\s,;/]+", text) if c]
+        if text and (len(codes) > 2 or not all(re.fullmatch(r"\d{3}", c) for c in codes)):
+            self.issues.error(where, f"Box 14b '{text}' must be one or two three-digit Treasury tipped occupation "
+                                     "codes")
+            return
+        has_tp = bool(w2.box12.get("TP"))
+        if codes and not has_tp:
+            self.issues.warning(where, "Box 14b has a tipped occupation code but Box 12 has no code TP; SSA asks "
+                                       "for the code when code TP (cash tips reported to the employer) is present")
+        if has_tp and not codes:
+            self.issues.warning(where, "Box 12 code TP is present but Box 14b has no Treasury tipped occupation "
+                                       "code; SSA asks for one")
+        values["tipped_occupation_primary"] = codes[0] if codes else None
+        values["tipped_occupation_secondary"] = codes[1] if len(codes) > 1 else None
+
     def rw(self, w2: W2) -> None:
         where = w2.where()
         values = self._person(w2, "RW", where)
         for key in ("box1_wages", "box2_fed_tax", "box3_ss_wages", "box4_ss_tax", "box5_medicare_wages",
                     "box6_medicare_tax", "box7_ss_tips", "box10_dependent_care"):
             values[key] = getattr(w2, key)
-        for key in self.rw_box12.values():
-            values[key] = Decimal(0)
+        values.update(self._box12(w2, "RW"))
         values["box11_nonqual_457"] = values["box11_nonqual_not_457"] = Decimal(0)
         if w2.box11_nonqualified:
             self.issues.error(where, f"Box 11 {w2.box11_nonqualified}: EFW2 splits Box 11 into section 457 and "
                                      "non-457 amounts; the input does not say which, so it is not written")
-        for code, amount in w2.box12.items():
-            if code in self.rw_box12:
-                values[self.rw_box12[code]] = amount
-            elif code in RO_BOX12:
-                self.issues.warning(where, f"Box 12 code {code} ({amount}) belongs in the RO record, which is "
-                                           "not written yet (TY2026 layout unverified). Virginia does not read RO.")
-            else:
-                self.issues.error(where, f"Box 12 code '{code}' is not a valid W-2 code")
-        if w2.box8_allocated_tips:
-            self.issues.warning(where, f"Box 8 allocated tips ({w2.box8_allocated_tips}) belong in the RO record, "
-                                       "which is not written yet")
-        if w2.box14b_tipped_occupation:
-            self.issues.error(where, "Box 14b tipped occupation code is present, but its TY2026 RW positions are "
-                                     "not verified yet, so it cannot be written")
+        self._tipped_occupation(w2, values)
         values["statutory_employee"] = "1" if w2.statutory_employee else "0"
         values["retirement_plan"] = "1" if w2.retirement_plan else "0"
         values["third_party_sick_pay"] = "1" if w2.third_party_sick_pay else "0"
         self._add("RW", values, where)
+
+    def ro(self, w2: W2) -> None:
+        """The optional employee record: written only when it would hold an amount (SSA 3.2.3)."""
+        if "RO" not in self.layout.records or "RO" not in self.employee_records:
+            return
+        values: dict[str, Any] = self._box12(w2, "RO")
+        if "box8_allocated_tips" in self.layout["RO"]:
+            values["box8_allocated_tips"] = w2.box8_allocated_tips
+        if any(values.values()):
+            self._add("RO", values, w2.where())
 
     def rs(self, w2: W2) -> None:
         where = w2.where()
@@ -182,13 +249,13 @@ class Efw2Builder:
         values.update({"state_employer_account": account, "state_wages": st.wages, "state_tax": st.tax})
         self._add("RS", values, where)
 
-    def rt(self, n_rw: int, rw_values: list[dict]) -> None:
-        values: dict[str, Any] = {"rw_count": str(n_rw)}
-        for f in self.layout["RT"].fields:
+    def _totals(self, record: str, count_key: str, rows: list[dict]) -> None:
+        values: dict[str, Any] = {count_key: str(len(rows))}
+        for f in self.layout[record].fields:
             if f.type == "M":
-                values[f.key] = sum((v.get(f.sum_of, Decimal(0)) for v in rw_values), Decimal(0)) \
+                values[f.key] = sum((v.get(f.sum_of) or Decimal(0) for v in rows), Decimal(0)) \
                     if f.sum_of else Decimal(0)
-        self._add("RT", values, "totals")
+        self._add(record, values, "totals")
 
     def rf(self, n_rw: int) -> None:
         self._add("RF", {"rw_count": str(n_rw)}, "final")
@@ -199,20 +266,24 @@ class Efw2Builder:
                                        f"({self.layout.tax_year})")
         self.ra(report)
         self.re(report)
-        employee_records = self.profile.get("employee_records", ["RW"])
         for w2 in report.employees:
             if not in_state_file(w2, self.profile):
                 self.issues.warning(w2.where(), f"no {self.profile['state_name']} wages in Box 15-17, so this "
                                                 f"employee is left out of the {self.profile['state_name']} file")
                 continue
+            self._note_unwritten(w2)
             self.rw(w2)
-            if "RS" in employee_records:
+            self.ro(w2)
+            if "RS" in self.employee_records:
                 self.rs(w2)
         rw_values = [v for rt, v in self.records if rt == "RW"]
+        ro_values = [v for rt, v in self.records if rt == "RO"]
         if not rw_values:
             self.issues.error("input", f"no employees to report for {self.profile.get('state_name', 'this file')}; "
                                        "check the Box 15 state column and the column mapping")
-        self.rt(len(rw_values), rw_values)
+        self._totals("RT", "rw_count", rw_values)
+        if ro_values:
+            self._totals("RU", "ro_count", ro_values)  # required whenever an RO record is written (SSA 3.2.5)
         self.rf(len(rw_values))
         return self.records
 

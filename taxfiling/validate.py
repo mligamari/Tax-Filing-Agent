@@ -12,9 +12,10 @@ from decimal import Decimal
 from .issues import Issues
 from .model import W2, WageReport
 
-# Federal amounts by tax year. Source: SSA 2026 COLA fact sheet (wage base),
-# IRC 3101 (rates).
+# Federal amounts by tax year, from SSA's EFW2 specification for that year ("What's New" and
+# Appendix H, Maximum Wage and Tax Table, in specs/ssa/): Social Security wage base and rates.
 FEDERAL = {
+    2025: {"ss_wage_base": Decimal("176100"), "ss_rate": Decimal("0.062"), "medicare_rate": Decimal("0.0145")},
     2026: {"ss_wage_base": Decimal("184500"), "ss_rate": Decimal("0.062"), "medicare_rate": Decimal("0.0145")},
 }
 
@@ -83,6 +84,9 @@ def _check_employee(w2: W2, year: int, issues: Issues) -> None:
         if ss_wages > fed["ss_wage_base"]:
             issues.error(where, f"Box 3 + Box 7 = {ss_wages} is over the {year} Social Security wage base "
                                 f"{fed['ss_wage_base']}")
+        max_ss_tax = (fed["ss_wage_base"] * fed["ss_rate"]).quantize(Decimal("0.01"))
+        if w2.box4_ss_tax > max_ss_tax:
+            issues.error(where, f"Box 4 Social Security tax {w2.box4_ss_tax} is over the {year} maximum {max_ss_tax}")
         expected_ss = (ss_wages * fed["ss_rate"]).quantize(Decimal("0.01"))
         if abs(w2.box4_ss_tax - expected_ss) > Decimal("1.00"):
             issues.warning(where, f"Box 4 Social Security tax {w2.box4_ss_tax} is not 6.2% of Box 3 + Box 7 "
@@ -91,8 +95,9 @@ def _check_employee(w2: W2, year: int, issues: Issues) -> None:
         if w2.box6_medicare_tax + Decimal("1.00") < min_medicare:
             issues.warning(where, f"Box 6 Medicare tax {w2.box6_medicare_tax} is less than 1.45% of Box 5 "
                                   f"({min_medicare})")
-    if w2.box5_medicare_wages + Decimal("0.01") < w2.box3_ss_wages + w2.box7_ss_tips:
-        issues.warning(where, "Box 5 Medicare wages are less than Box 3 + Box 7; usually they are equal or more")
+    if w2.box5_medicare_wages < w2.box3_ss_wages + w2.box7_ss_tips:
+        issues.error(where, "Box 5 Medicare wages are less than Box 3 + Box 7; SSA rejects a file with this "
+                            "(EFW2 'Common Conditions That Will Cause SSA to Reject')")
     if w2.box4_ss_tax and not (w2.box3_ss_wages or w2.box7_ss_tips):
         issues.error(where, "Box 4 has Social Security tax but Boxes 3 and 7 are zero")
     if w2.box6_medicare_tax and not w2.box5_medicare_wages:
@@ -136,6 +141,9 @@ def validate_report(report: WageReport) -> Issues:
     if e.employment_code not in ("A", "H", "M", "Q", "X", "F", "R"):
         issues.error("employer", "employment code must be A, H, M, Q, X, F or R")
 
+    if report.tax_year not in FEDERAL:
+        issues.warning("input", f"no Social Security wage base on file for {report.tax_year}; the wage base and "
+                                "tax rate checks were skipped")
     if not report.employees:
         issues.error("input", "no employee rows found")
     for w2 in report.employees:

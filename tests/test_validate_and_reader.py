@@ -26,11 +26,12 @@ def test_reads_the_synthetic_workbook():
     assert employer.ein == "543187620"
     assert employer.state_ids == {"VA": "30-543187620F-001"}
     first = employees[0]
-    assert first.ssn == "864789322"
-    assert first.box12 == {"D": Decimal("1861.42"), "DD": Decimal("10172.05"), "C": Decimal("102.58"),
-                           "TT": Decimal("809.38")}
+    assert first.ssn == "237965232"
+    assert first.box12 == {"D": Decimal("9642.73"), "DD": Decimal("12394.50"), "W": Decimal("2383.56"),
+                           "C": Decimal("374.98")}
     assert first.retirement_plan and not first.statutory_employee
-    assert first.states[0].wages == Decimal("33435.14")
+    assert first.states[0].wages == Decimal("82297.12")
+    assert employees[11].box12["T"] == Decimal("9850.00")
     assert not issues.errors and not issues.warnings
 
 
@@ -77,6 +78,26 @@ def test_invalid_ssn_is_an_error(va_report):
     assert "666123456" not in str(errors[0])
 
 
-def test_social_security_wage_base_is_enforced(va_report):
-    va_report.employees[0].box3_ss_wages = Decimal("184500.01")
-    assert any("wage base" in e.message for e in validate_report(va_report).errors)
+def test_social_security_wage_base_is_enforced(va_report, va_report_2026):
+    """2025 base $176,100 and 2026 base $184,500, from SSA's EFW2 specification for each year."""
+    va_report.employees[0].box3_ss_wages = va_report.employees[0].box5_medicare_wages = Decimal("176100.01")
+    assert any("wage base 176100" in e.message for e in validate_report(va_report).errors)
+    va_report_2026.employees[0].box3_ss_wages = va_report_2026.employees[0].box5_medicare_wages = Decimal("176100.01")
+    assert not any("wage base" in e.message for e in validate_report(va_report_2026).errors)
+
+
+def test_social_security_tax_over_the_maximum(va_report):
+    va_report.employees[0].box4_ss_tax = Decimal("10918.21")  # 6.2% of 176,100 = 10,918.20
+    assert any("over the 2025 maximum 10918.20" in e.message for e in validate_report(va_report).errors)
+
+
+def test_medicare_wages_below_social_security_wages_is_an_error(va_report):
+    """SSA lists this among the conditions that make it reject a whole file."""
+    va_report.employees[0].box5_medicare_wages = va_report.employees[0].box3_ss_wages - Decimal("0.01")
+    assert any("Box 5 Medicare wages are less" in e.message for e in validate_report(va_report).errors)
+
+
+def test_a_year_without_federal_amounts_is_flagged(va_report):
+    va_report.tax_year = 2031
+    assert any("no Social Security wage base on file for 2031" in w.message
+               for w in validate_report(va_report).warnings)

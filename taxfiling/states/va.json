@@ -7,12 +7,17 @@
       "agency": "Virginia Department of Taxation (Virginia Tax)",
       "portal": "Web Upload, W-2 text file",
       "format": "EFW2",
-      "layout": "efw2_ty2026",
-      "employee_records": ["RW", "RS"],
+      "layouts": {"2025": "efw2_ty2025", "2026": "efw2_ty2026"},
+      "default_year": 2025,
+      "employee_records": ["RW", "RO", "RS"],
       "state_record": "RS",
       "only_employees_with_state_wages": true,
       "one_state_record_per_employee": true,
       "state_record_values": {"state_code": "51", "state_code_2": "51"},
+      "required_fields": {
+        "RE": ["tax_year", "employer_ein", "employer_name"],
+        "RS": ["state_code", "ssn", "first_name", "last_name", "delivery_address", "state_code_2"]
+      },
       "account_number": {
         "field": "state_employer_account",
         "pattern": "^(30|38)[0-9A-Z]{13}$",
@@ -21,14 +26,16 @@
       "final_line_ending": false,
       "default_file_name": "W2 REPORT {year}.txt",
       "rules": [
-        "Virginia requires one RS record per employee, with state code 51; SSA does not require RS.",
-        "Virginia reads the RE record (tax year in positions 3-6, FEIN, name) and the RS records. Other EFW2 records may be included but are not used or validated.",
+        "Virginia requires one RS record per employee, with state code 51 in positions 3-4 and 274-275; SSA does not require RS.",
+        "Virginia reads the RE record (tax year in positions 3-6, FEIN in 8-16, employer name in 40-96) and, in each RS record, the employee's SSN, name, address, state wages (276-286) and state tax withheld (287-297). Other RS positions are filler to Virginia.",
+        "Other EFW2 records may be included in the file; Virginia does not use or validate them. This file is a complete SSA EFW2 file, so it also carries RO and RU records when employees have amounts that go in them.",
         "If an RE record has an error, Virginia does not review its RS records until it is corrected.",
-        "Records may be separated by CR/LF; each record except the last is followed by exactly one CR/LF.",
-        "Only one form type per file. Virginia recommends naming the file 'W2 REPORT', optionally with the tax year, and no special characters."
+        "Each record except the last is followed by exactly one CR/LF; no delimiter before the first record or inside a record.",
+        "Only one form type per file. Virginia recommends naming the file 'W2 REPORT', optionally with the tax year, with no special characters.",
+        "RS 248-267 (SSA's State Employer Account Number) is filler in Virginia's W-2 layout; this program puts the Virginia withholding account number from Box 15 there and checks its format, which Virginia's W-2C layout describes as 15 characters beginning with 30 or 38."
       ],
       "source": {
-        "title": "Virginia Tax, Web Upload Guide for W-2 and 1099 files (Appendix A)",
+        "title": "Virginia Tax, Web Upload Guide for W-2s, W-2Cs, and 1099s (Revised 1/2025), Appendix A",
         "url": "https://tax.am.virginia.gov/sites/default/files/inline-files/web-upload-w2-1099-guide.pdf"
       }
     }

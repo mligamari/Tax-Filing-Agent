@@ -18,7 +18,7 @@ def no_network(monkeypatch):
 
 
 def test_full_run_needs_no_network_and_prints_no_ssn(no_network, tmp_path, capsys, va_report):
-    out = tmp_path / "W2 REPORT 2026.txt"
+    out = tmp_path / "W2 REPORT 2025.txt"
     code = main(["w2", "--state", "VA", "--input", str(VA_WORKBOOK), "--submitter", str(VA_SUBMITTER),
                  "--out", str(out)])
     assert code == 0

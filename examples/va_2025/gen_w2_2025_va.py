@@ -35,6 +35,12 @@ VA_STD = {"Single": 8_750, "Married": 17_500, "Head of Household": 8_750}   # AS
 VA_EXEMPTION = 930                                                          # per VA-4 exemption
 VA_BRACKETS = [(3_000, .02), (5_000, .03), (17_000, .05), (float("inf"), .0575)]
 
+# One employee received employer-paid adoption assistance (IRC 137) in Q3: left out of Box 1 and
+# Virginia wages, but subject to Social Security, Medicare and unemployment tax, and reported in
+# Box 12 code T. Code T is the one amount in this file that SSA's EFW2 puts in the optional RO record.
+# A fixed row (not a random draw), so the other 49 employees are unchanged.
+ADOPTION_INDEX, ADOPTION_AMOUNT, ADOPTION_QUARTER = 11, 9_850.00, 2
+
 
 def bracket_tax(income, brackets):
     tax, lo = 0.0, 0.0
@@ -167,8 +173,9 @@ for i in range(N):
     gross_taxable = r2(gross + imputed_life)
 
     sec125 = r2(health125 + hsa + dep_care)
+    adoption = ADOPTION_AMOUNT if i == ADOPTION_INDEX else 0.0
     box1 = r2(gross_taxable - k401 - sec125)
-    fica_wages = r2(gross_taxable - sec125)
+    fica_wages = r2(gross_taxable - sec125 + adoption)
 
     # ---- quarterly allocation: days worked per quarter, bonus paid in Q4 ----
     qdays = [overlap_days(start, end, q0, q1) for _, q0, q1 in QUARTERS]
@@ -180,6 +187,8 @@ for i in range(N):
     q_k401 = split(k401, q_wt)
     q_fica = [r2(g + im - s) for g, im, s in zip(q_gross, q_imputed, q_sec125)]
     q_box1 = [r2(f - k) for f, k in zip(q_fica, q_k401)]
+    if adoption:  # FICA and UI wages only; Box 1 and Virginia wages exclude it
+        q_fica[ADOPTION_QUARTER] = r2(q_fica[ADOPTION_QUARTER] + adoption)
     q_ss = capped_quarters(q_fica, SS_BASE)
     box3 = r2(sum(q_ss))
     box5 = fica_wages
@@ -212,6 +221,8 @@ for i in range(N):
     if er_health: box12.append(("DD", r2(er_health + health125)))
     if hsa: box12.append(("W", hsa))
     if imputed_life: box12.append(("C", imputed_life))
+    if adoption: box12.append(("T", adoption))
+    assert len(box12) <= 4, i
     box12 += [("", None)] * (4 - len(box12))
     box12 = box12[:4]
 
@@ -281,6 +292,7 @@ for i in range(N):
         "Sec 125 Health Premium": health125,
         "Sec 125 HSA": hsa,
         "Sec 125 Dependent Care": dep_care,
+        "Adoption Assistance (Box 12 T)": adoption,
         "FUTA Taxable Wages": r2(sum(q_futa)),
         "FUTA Tax (employer)": r2(sum(q_futa) * FUTA_RATE),
         "VA UI Gross Wages": ui_gross,
@@ -424,7 +436,8 @@ notes = [
     ("Local tax", "None", "Virginia has no local income tax, so Boxes 18-20 are blank"),
     ("Box 14", "Blank", "Virginia has no employee SDI/PFL deductions"),
     ("Box 15 state ID", "30-543187620F-001", "Fictional; follows the VA Tax withholding account pattern (30 + FEIN + F001)"),
-    ("Box 12 codes", "D 401(k), DD employer health cost, W HSA, C group-term life >$50k", "The 2025 W-2 has no code TT (qualified overtime) or Box 14b; both start with the 2026 form"),
+    ("Box 12 codes", "D 401(k), DD employer health cost, W HSA, C group-term life >$50k, T adoption benefits (one employee, $9,850 paid in Q3)",
+     "Adoption assistance is excluded from Box 1 and Virginia wages (IRC 137) but is Social Security, Medicare and FUTA wages (IRS Pub 15-B). The 2025 W-2 has no code TT (qualified overtime) or Box 14b; both start with the 2026 form"),
     ("Box 16 VA wages", "Equal to Box 1", "No Virginia-specific modifications assumed"),
     ("Quarterly split", "Base pay and overtime spread by days employed in each quarter; bonuses paid in Q4; deductions and withholding split in proportion to quarterly wages",
      "SS, Medicare, VA UI and FUTA wage bases applied cumulatively, so taxable wages fall in the earliest quarters. Quarterly columns sum exactly to the W-2 boxes (checked by the generator)"),
