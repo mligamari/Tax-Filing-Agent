@@ -1,3 +1,4 @@
+import socket
 from pathlib import Path
 
 import pytest
@@ -19,6 +20,18 @@ def example(year: int) -> tuple[Path, Path, Path]:
 
 # Tax year 2025 is the default: its SSA specification and Virginia's guide are final.
 VA_WORKBOOK, VA_SUBMITTER, VA_GOLDEN = example(2025)
+# The same 2025 people and amounts, exported the way a payroll system might (see its generator).
+MESSY_WORKBOOK = ROOT / "examples" / "va_2025_messy" / "w2_2025_va_messy.xlsx"
+
+
+@pytest.fixture
+def no_network(monkeypatch):
+    """Any attempt to open a socket or resolve a name fails the test."""
+    def refuse(*args, **kwargs):
+        raise AssertionError("network access attempted")
+    monkeypatch.setattr(socket, "socket", refuse)
+    monkeypatch.setattr(socket, "create_connection", refuse)
+    monkeypatch.setattr(socket, "getaddrinfo", refuse)
 
 
 def make_report(year: int) -> WageReport:

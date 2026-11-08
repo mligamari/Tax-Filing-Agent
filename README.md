@@ -6,8 +6,13 @@ prove it says exactly what the spreadsheet says.
 
 It runs entirely on your own computer. Payroll files are full of Social Security
 numbers, and many employers' privacy agreements forbid uploading them to a cloud AI
-service. So the part that touches SSNs is plain Python with no network access, and
-the AI layer planned for later will only ever see column headers.
+service. So the part that touches SSNs is plain Python with no network access. The one
+step that uses AI, working out which column of a messy spreadsheet holds which W-2 box,
+sends the model column headers and the *shape* of the values (`###-##-####`, `Aa`,
+`#.##`), never a value, and a guard inside the HTTP client checks every request byte
+against the workbook before it can leave. See
+[AI column mapping and the privacy boundary](#ai-column-mapping-and-the-privacy-boundary)
+and [SECURITY.md](SECURITY.md).
 
 > All data in this repository is synthetic. The SSNs are random numbers attached to
 > made-up people at a made-up company.
@@ -86,7 +91,7 @@ Requires Python 3.10 or newer.
 ```bash
 git clone https://github.com/mligamari/Tax-Filing-Agent.git
 cd Tax-Filing-Agent
-python -m pip install -e ".[test]"
+python -m pip install -e ".[test]"          # add ,ai (".[test,ai]") for the Claude / local-model mapper
 
 python -m taxfiling w2 --state VA --input examples/va_2025/w2_2025_va_synthetic.xlsx \
     --submitter examples/va_2025/submitter.json --out "W2 REPORT 2025.txt"
@@ -102,6 +107,7 @@ python -m pytest
 | `check` | Checks any file against the layout and state rules. With `--input` it also compares every employee and amount with the source. |
 | `show` | Prints a file field by field with positions. SSNs are masked unless `--show-ssn` is given. |
 | `layout` | Lists a layout table, with the page of SSA's spec that defines each field. |
+| `map` | Proposes a column mapping for a spreadsheet laid out differently from the sample, with fixed rules (default, offline), Claude (`--ai claude`) or a model on your computer (`--ai local`). `--dry-run` prints exactly what would be sent. |
 
 `check` and `show` read the tax year from the file and pick the matching layout. `w2`
 uses the state's default year (2025 for Virginia) unless `--year` is given.
@@ -185,11 +191,160 @@ Virginia's rules come from Virginia Tax's
 (revised 1/2025), Appendix A. Virginia reads the RE record and the RS records, and
 accepts the other records without checking them.
 
-## Privacy and security
+## AI column mapping and the privacy boundary
 
-* **No network access.** The program never opens a connection. A test runs the whole
-  write, check and show cycle with Python's socket functions replaced by ones that
-  fail, so any network call would fail the test.
+Real payroll exports never look like the sample sheet. One system says "Social Sec #",
+another "EE SSN"; one puts Box 15's state in a column called "Work State", next to a
+"St" column that is the employee's home state. Working out which column is which is
+the one judgment call in this pipeline, and it is the only part a language model does.
+Everything that touches a Social Security number stays deterministic, local Python.
+
+```text
+ workbook (.xlsx) ─► every cell, in memory on this computer ───────────────────┐
+        │                         │                                             │
+        │                  denylist: every cell value                          │
+        ▼                         │                                             │
+ profile: headers, types,         │                                             │
+ shapes (###-##-####, Aa, #.##)   │                                             │
+        │                         ▼                                             │
+        ├─► CHECK 1  build_payload(): patterns + denylist on the payload        │
+        │                                                                       │
+        ├─► CHECK 2  inside the HTTP client, on the exact bytes about to go:     │
+        │            host allow list, HTTPS, POST /v1/messages,                  │
+        │            patterns + denylist  ──► audit log (exact bytes)            │
+        ▼                                                                       │
+ ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ the only thing that leaves the machine ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ │
+ Claude (api.anthropic.com) or a local model (loopback only) or no model        │
+        │  answer: {field -> column id}                                         │
+        ▼                                                                       │
+ CHECK 3  untrusted answer: known ids and fields only, each column's            │
+          shape must fit its field, required fields present                     │
+        ▼                                                                       │
+ mapping JSON (header names only) ─► a person reviews it                         │
+        ▼                                                                       ▼
+ `taxfiling w2 --mapping ...`: reader + writer + round-trip checker on the full rows
+```
+
+### What leaves the machine, and what does not
+
+| Sent to the model | Never sent |
+|---|---|
+| Column headers and sheet names, unless they look like data (then withheld) | Any cell value below the header row, whole or in part |
+| Cell types per column (`text`, `integer`, `decimal`, `date`) and fill counts | SSNs, names, addresses, ZIP codes, EINs, state account numbers, amounts |
+| Up to three value *shapes* per column: letters collapsed to `A`/`a`/`Aa`, digits to `#` | The last four digits of an SSN (shapes have no digits at all) |
+| Labels like `us_state_code` when *every* value is in a public list | The values behind those labels |
+| The fixed instructions and the W-2 field list | Your API key in a logged form (headers are never logged) |
+
+This is the actual text sent for four columns of the messy example
+([`examples/va_2025_messy/`](examples/va_2025_messy/)):
+
+```text
+{"id": "S1.C06", "column": "F", "header": "Social Sec #", "filled": "50 of 51", "types": {"integer": 50}, "shapes": ["#"]},
+{"id": "S1.C09", "column": "I", "header": "St", "filled": "50 of 51", "types": {"text": 50}, "shapes": ["A"], "all_values_are": ["us_state_code"]},
+{"id": "S1.C13", "column": "M", "header": "Fed Wages", "filled": "50 of 51", "types": {"text": 50}, "shapes": ["$#,###.##"]},
+{"id": "S1.C35", "column": "AI", "header": "State Acct #", "filled": "50 of 51", "types": {"text": 50}, "shapes": ["##-#########A-###"]},
+```
+
+A name shape is `Aa` whatever its length; an amount shape shows its format (`#.##`,
+`$#,###.##`), never its size. `python -m taxfiling map --input FILE --dry-run` prints the
+whole payload, so you can read every byte before deciding to send it.
+
+### How the boundary is enforced
+
+The rule is enforced by code that does not trust the code before it:
+
+1. **Shapes by construction.** The profiler ([`mapper/profile.py`](taxfiling/mapper/profile.py))
+   never copies a cell value into its output, only its shape.
+2. **Check 1, on the payload.** [`build_payload()`](taxfiling/mapper/boundary.py) is the only
+   way to make an `OutboundPayload` (the constructor refuses to run without it), and it
+   checks every string against the workbook itself: nothing shaped like an SSN, no run of
+   5+ digits, no e-mail or phone number, no string equal to a cell value, no cell value
+   that mixes letters and 4+ digits (a street address), no 4-digit number that is the end
+   of a 9-digit cell. A header or sheet name that fails is withheld before this point.
+3. **Check 2, on the wire.** The model providers ([`mapper/providers.py`](taxfiling/mapper/providers.py))
+   install a request hook in the HTTP client. After the SDK has turned the request into
+   bytes, and before any byte is sent, the hook checks the host (only `api.anthropic.com`
+   over HTTPS for Claude; only `localhost`/`127.0.0.1`/`::1` for a local model), the path
+   (`POST /v1/messages` only) and the body (the same checks as step 2). A failure stops the
+   request; nothing is retried. Setting `ANTHROPIC_BASE_URL` cannot redirect it.
+4. **Audit log of the exact bytes.** Only after check 2 passes is the body written to
+   `mapping-audit.jsonl`, with its SHA-256, followed by the model's answer. HTTP headers,
+   where the API key travels, are never logged; a blocked request is logged with its
+   reason, never its body. The mapping file records the payload hash, so each mapping
+   can be traced to the request that produced it.
+5. **The answer is untrusted.** The answer format lists the real column ids, so the model
+   can only name columns that exist; [`mapper/proposal.py`](taxfiling/mapper/proposal.py)
+   checks it again locally and compares each column's shape with its field (an SSN column
+   must look like `###-##-####`, a money column must hold numbers, a flag Y/N). A model that
+   swaps two columns gets a warning on each, and a person reviews the table before use.
+6. **The file is still checked.** The writer and the round-trip checker run on the full rows
+   exactly as before, so a wrong mapping shows up as validation errors or a failed check.
+7. **Consent, and no network otherwise.** Sending asks first (or needs `--yes`). The
+   `anthropic` package is an optional extra imported only by the model providers; a test
+   proves `w2`, `check`, `show` and `map --ai none` never load it or any HTTP library.
+
+### Three modes
+
+| `--ai` | Who proposes the mapping | Network |
+|---|---|---|
+| `none` (default) | Fixed header rules ([`mapper/heuristic.py`](taxfiling/mapper/heuristic.py)). Cautious: when two columns match, it maps neither and says so. | None |
+| `claude` | Claude (`claude-opus-5-5` by default) through Anthropic's API, with structured output | `api.anthropic.com` only |
+| `local` | Any model on your computer that serves the Anthropic Messages API, such as Ollama (`--model qwen3`) | Loopback only; any other address is refused |
+
+All three get the same payload and answer in the same format, so the checks after them
+do not care which one answered.
+
+```bash
+python -m taxfiling map --input examples/va_2025_messy/w2_2025_va_messy.xlsx --dry-run      # read the payload
+python -m taxfiling map --input examples/va_2025_messy/w2_2025_va_messy.xlsx                # no model
+export ANTHROPIC_API_KEY=...                                                                  # or `ant auth login`
+python -m taxfiling map --input examples/va_2025_messy/w2_2025_va_messy.xlsx --ai claude    # asks before sending
+python -m taxfiling w2 --state VA --input examples/va_2025_messy/w2_2025_va_messy.xlsx \
+    --submitter examples/va_2025/submitter.json --mapping w2_2025_va_messy.mapping.json
+```
+
+On the messy example, the fixed rules map 31 of the sheet's 33 W-2 fields and all four Box 12 pairs, and stop at "St"
+versus "Work State", which only context can settle:
+
+```text
+Required fields not mapped: state, box15_state
+  note: state: columns S1.C09, S1.C34 all match; left unmapped for you to choose
+```
+
+[`w2_2025_va_messy.mapping.json`](examples/va_2025_messy/w2_2025_va_messy.mapping.json) is
+that proposal with the two lines added by hand. The messy workbook holds the same people
+and amounts as the standard 2025 example, so the file it produces is byte-for-byte the
+committed `W2 REPORT 2025.txt`; the tests and CI check that, and check that a model's
+correct answer gives the same result.
+
+### Tests that hold the boundary in place
+
+* [`tests/test_mapper_boundary.py`](tests/test_mapper_boundary.py): for all three example
+  workbooks, no SSN (dashed or not), last four of an SSN, name, street, city, ZIP, EIN, state
+  account number or amount appears in the payload, and it has no run of 5+ digits. With
+  shape masking switched off, or a bug that copies a value into the profile, the payload is
+  refused, and the error message itself quotes no data. Headers holding a name, phone number
+  or e-mail, and a sheet named after an SSN, are withheld. Each kind of data is blocked by
+  the wire check, including in JSON keys and numbers.
+* [`tests/test_mapper_providers.py`](tests/test_mapper_providers.py) (against a mock HTTP
+  transport, with sockets disabled): the bytes that reach the transport are clean and equal
+  the audit log entry; the API key is not in the log; a request built by calling the SDK
+  directly with an SSN in it never reaches the transport; `ANTHROPIC_BASE_URL` and a moved
+  client cannot change the host; a "local" model on another machine is refused.
+* [`tests/test_mapper_proposal.py`](tests/test_mapper_proposal.py): unknown sheets, columns,
+  fields, duplicates and columns from another sheet are refused; swapped columns are flagged.
+* [`tests/test_mapper_end_to_end.py`](tests/test_mapper_end_to_end.py): messy workbook to
+  checked Virginia file through the command line, byte-identical to the committed file, with
+  no SSN in anything printed or logged.
+
+[SECURITY.md](SECURITY.md) has the threat model: what is protected, from what, how, and
+what is left over.
+
+## Privacy and security (the rest of the pipeline)
+
+* **No network access.** Only `map --ai claude` and `map --ai local` can open a connection.
+  A test runs the whole write, check and show cycle with Python's socket functions replaced
+  by ones that fail, and another proves those commands never import an HTTP library.
 * **SSNs stay out of everything printed.** Console output, warnings and error
   messages mask SSNs (`***-**-5232`). The same test checks that none of the 50 SSNs
   appears anywhere in the console output. Only the output file holds full SSNs,
@@ -198,13 +353,7 @@ accepts the other records without checking them.
   before they are written, so a file that fails its check never sits on disk under
   the name the state expects.
 * **Real data stays out of git.** `.gitignore` excludes a `private/` folder for real
-  workbooks, and only synthetic data is committed.
-* **Planned AI step sees headers only.** The one judgment call in this pipeline is
-  which spreadsheet column holds which W-2 box. That answer is a small JSON mapping
-  ([`taxfiling/mappings/w2_standard.json`](taxfiling/mappings/w2_standard.json)).
-  A model can propose it from the column headers alone (with masked samples at
-  most), and the local code applies it to the real rows. It will also run with no
-  model at all, or with a local model, and will log exactly what was sent.
+  workbooks and the mapping audit log, and only synthetic data is committed.
 
 This makes the tool much safer to run on real payroll data than pasting a
 spreadsheet into a chat window. Whether that is allowed for a particular client is
@@ -218,9 +367,10 @@ still the employer's decision.
 * **Not supported yet:** Puerto Rico and U.S. territory wages (their RO fields are left
   at zero), the optional employer signature PIN that 2026 adds to the RE record (left
   blank), and the state-defined RV record (Virginia defines none, so none is written).
+* **The mapper** reads one row per employee with one column per box. A sheet with one row
+  per Box 12 entry, or names in a single "Last, First" column, needs reshaping first.
 * Next: Virginia Employment Commission quarterly UI wage file (the sample workbooks
-  already have a quarterly sheet), then ICESA, more states, the AI column mapper for
-  messy spreadsheets, and a simple local app.
+  already have a quarterly sheet), then ICESA, more states, and a simple local app.
 
 Before filing for real, upload a test file through the state's portal and compare
 it with SSA's free AccuWage tool. This project is a portfolio piece, not tax advice.
@@ -250,6 +400,7 @@ taxfiling/
   states/              per-state rules (JSON)
   mappings/            spreadsheet column mappings (JSON)
   readers/excel.py     workbook -> W-2 model
+  mapper/              column mapper: profile, privacy boundary, providers, answer checks
   validate.py          SSN, EIN, address and amount checks
   formats/efw2.py      W-2 model -> EFW2 records
   check.py             round-trip checker
@@ -258,5 +409,6 @@ specs/ssa/             text of SSA's EFW2 specifications for 2025 and 2026
 tools/                 spec-text parser and layout builder
 examples/va_2025/      synthetic workbook, its generator, submitter settings, output
 examples/va_2026/      the same for tax year 2026
+examples/va_2025_messy/ the 2025 data as a messy payroll export, its generator and mapping
 tests/                 pytest suite
 ```

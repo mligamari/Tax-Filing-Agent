@@ -1,0 +1,132 @@
+"""Make a "messy" copy of the 2025 synthetic Virginia workbook, the kind a payroll system exports.
+
+Same 50 people and the same amounts as examples/va_2025/w2_2025_va_synthetic.xlsx, but:
+
+* one sheet with a title block above the headers (headers on row 4) and a totals row;
+* abbreviated, reordered headers ("Fed W/H", "SS Wgs", "St", "Work State", "12A Cd");
+* SSNs stored as numbers, ZIP codes as numbers, Box 1 and Box 16 as "$82,297.12" text,
+  Box 13 checkboxes as Yes/No;
+* extra columns a W-2 does not use (department, hire date, notes).
+
+Because the data is the same, the right mapping must produce a file byte-for-byte equal to
+examples/va_2025/output/W2 REPORT 2025.txt; tests/test_mapper_end_to_end.py checks that.
+
+    python examples/va_2025_messy/make_messy_workbook.py
+"""
+from __future__ import annotations
+
+import datetime as dt
+import random
+from decimal import Decimal
+from pathlib import Path
+
+from openpyxl import Workbook, load_workbook
+
+HERE = Path(__file__).resolve().parent
+SOURCE = HERE.parent / "va_2025" / "w2_2025_va_synthetic.xlsx"
+OUT = HERE / "w2_2025_va_messy.xlsx"
+
+# (messy header, standard header or a function of the standard row)
+def money_text(v):
+    return None if v is None else f"${Decimal(str(v)):,}"
+
+
+def yes_no(v):
+    return {"Y": "Yes", "N": "No"}.get(v, v)
+
+
+COLUMNS = [
+    ("Emp ID", "Control Number (d)", None),
+    ("Last", "Employee Last Name (e)", None),
+    ("First", "Employee First Name (e)", None),
+    ("MI", "Employee Middle Initial (e)", None),
+    ("Sfx", "Employee Suffix (e)", None),
+    ("Social Sec #", "Employee SSN (a)", lambda v: int(v.replace("-", ""))),
+    ("Home Street", "Employee Address (f)", None),
+    ("City", "Employee City (f)", None),
+    ("St", "Employee State (f)", None),
+    ("Zip Code", "Employee ZIP (f)", lambda v: int(v)),
+    ("Dept", None, None),
+    ("Hire Date", None, None),
+    ("Fed Wages", "Box 1 Wages, Tips, Other Comp", money_text),
+    ("Fed W/H", "Box 2 Federal Income Tax Withheld", None),
+    ("SS Wgs", "Box 3 Social Security Wages", None),
+    ("SS W/H", "Box 4 Social Security Tax Withheld", None),
+    ("Medicare Wgs", "Box 5 Medicare Wages and Tips", None),
+    ("Medicare W/H", "Box 6 Medicare Tax Withheld", None),
+    ("SS Tips", "Box 7 Social Security Tips", None),
+    ("Alloc Tips", "Box 8 Allocated Tips", None),
+    ("Dep Care", "Box 10 Dependent Care Benefits", None),
+    ("NQ Plans", "Box 11 Nonqualified Plans", None),
+    ("12A Cd", "Box 12a Code", None), ("12A Amt", "Box 12a Amount", None),
+    ("12B Cd", "Box 12b Code", None), ("12B Amt", "Box 12b Amount", None),
+    ("12C Cd", "Box 12c Code", None), ("12C Amt", "Box 12c Amount", None),
+    ("12D Cd", "Box 12d Code", None), ("12D Amt", "Box 12d Amount", None),
+    ("Stat Emp", "Box 13 Statutory Employee", yes_no),
+    ("Ret Plan", "Box 13 Retirement Plan", yes_no),
+    ("3rd Party Sick", "Box 13 Third-Party Sick Pay", yes_no),
+    ("Work State", "Box 15 State", None),
+    ("State Acct #", "Box 15 Employer State ID", None),
+    ("State Wgs", "Box 16 State Wages", money_text),
+    ("State W/H", "Box 17 State Income Tax", None),
+    ("FEIN", "Employer EIN (b)", None),
+    ("Company", "Employer Name (c)", None),
+    ("Co Street", "Employer Address (c)", None),
+    ("Co City", "Employer City (c)", None),
+    ("Co State", "Employer State (c)", None),
+    ("Co Zip", "Employer ZIP (c)", lambda v: int(v)),
+    ("Notes", None, None),
+]
+
+# The right answer, for the tests and the README: messy header -> W-2 field.
+EXPECTED = {
+    "control_number": "Emp ID", "last_name": "Last", "first_name": "First", "middle_name": "MI",
+    "suffix": "Sfx", "ssn": "Social Sec #", "address": "Home Street", "city": "City", "state": "St",
+    "zip": "Zip Code", "box1_wages": "Fed Wages", "box2_fed_tax": "Fed W/H", "box3_ss_wages": "SS Wgs",
+    "box4_ss_tax": "SS W/H", "box5_medicare_wages": "Medicare Wgs", "box6_medicare_tax": "Medicare W/H",
+    "box7_ss_tips": "SS Tips", "box8_allocated_tips": "Alloc Tips", "box10_dependent_care": "Dep Care",
+    "box11_nonqualified": "NQ Plans", "statutory_employee": "Stat Emp", "retirement_plan": "Ret Plan",
+    "third_party_sick_pay": "3rd Party Sick", "box15_state": "Work State", "box15_state_id": "State Acct #",
+    "box16_state_wages": "State Wgs", "box17_state_tax": "State W/H", "employer_ein": "FEIN",
+    "employer_name": "Company", "employer_address": "Co Street", "employer_city": "Co City",
+    "employer_state": "Co State", "employer_zip": "Co Zip",
+}
+
+
+def main() -> None:
+    random.seed(2025)
+    src = load_workbook(SOURCE, read_only=True, data_only=True)
+    rows = list(src["W-2 Data"].iter_rows(values_only=True))
+    src.close()
+    index = {h: i for i, h in enumerate(rows[0])}
+    people = [r for r in rows[1:] if r[index["Employee SSN (a)"]]]
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "YE Export"
+    ws.append(["Year-End Payroll Export, W-2 detail"])
+    ws.append(["Generated by the payroll system; synthetic data"])
+    ws.append([])
+    ws.append([c[0] for c in COLUMNS])
+    depts = ["Machining", "Assembly", "Quality", "Office", "Shipping"]
+    for r in people:
+        out = []
+        for header, std, fn in COLUMNS:
+            if header == "Dept":
+                out.append(random.choice(depts))
+            elif header == "Hire Date":
+                out.append(dt.date(2000 + random.randint(0, 24), random.randint(1, 12), random.randint(1, 28)))
+            elif std is None:
+                out.append(None)
+            else:
+                v = r[index[std]]
+                out.append(fn(v) if fn and v is not None else v)
+        ws.append(out)
+    ws.append(["TOTAL"])
+    wb.properties.created = wb.properties.modified = dt.datetime(2026, 1, 15)
+    wb.save(OUT)
+    print(f"wrote {OUT} ({len(people)} employees)")
+
+
+if __name__ == "__main__":
+    main()
