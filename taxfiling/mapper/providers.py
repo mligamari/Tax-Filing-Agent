@@ -4,12 +4,19 @@ All three receive the same OutboundPayload and return the same JSON answer, whic
 proposal.py checks before anything uses it.
 
 For the two model providers, the HTTP client gets a request hook (wire_guard) that
-runs on every request after the SDK has serialized it and before a byte is sent:
+runs on every request after the SDK has serialized it and before a byte is sent, and
+checks the whole request, not only its body:
 
-* the host must be on the provider's allow list (api.anthropic.com over HTTPS for
-  Claude; localhost, 127.0.0.1 or ::1 for a local model), and the path /v1/messages;
-* the body must pass boundary.check_wire_body() against the workbook's denylist;
-* only then is the body written to the audit log, and the request allowed out.
+* where it goes: the host must be on the provider's allow list (api.anthropic.com over
+  HTTPS for Claude; localhost, 127.0.0.1 or ::1 for a local model), and the request must
+  be POST to exactly the provider's /v1/messages URL, with no query string and no user
+  name in the URL;
+* its headers must pass boundary.check_wire_headers(): only the SDK's own headers, and
+  no workbook data in any name or value (the values from your Anthropic login, such as
+  the API key, are the only ones not compared);
+* its body must pass boundary.check_wire_body() against the workbook's denylist;
+* only then are the URL, the headers (without the credential) and the body written to
+  the audit log, and the request allowed out.
 
 If the hook raises, the request is not sent. The anthropic package is imported only
 here, and only when a model provider is used, so the rest of the program has no
@@ -24,7 +31,7 @@ from typing import Callable
 from urllib.parse import urlsplit
 
 from .audit import AuditLog
-from .boundary import BoundaryViolation, Denylist, OutboundPayload, check_wire_body
+from .boundary import BoundaryViolation, Denylist, OutboundPayload, check_wire_body, check_wire_headers
 from .heuristic import propose_offline
 from .profile import WorkbookProfile
 
@@ -33,6 +40,8 @@ CLAUDE_HOSTS = {"api.anthropic.com"}
 DEFAULT_CLAUDE_MODEL = "claude-opus-5-5"
 DEFAULT_LOCAL_URL = "http://localhost:11434"     # Ollama, which serves the Anthropic Messages API
 LOOPBACK_NAMES = {"localhost"}
+ALLOWED_QUERIES = {b"", b"beta=true"}            # some SDK versions mark beta endpoints with ?beta=true
+DEFAULT_PORTS = {"http": 80, "https": 443}
 
 
 class ProviderError(Exception):
@@ -49,24 +58,32 @@ def is_loopback(host: str) -> bool:
         return False
 
 
-def wire_guard(provider: str, deny: Denylist, audit: AuditLog, allow_host: Callable[[str], bool],
-               require_https: bool) -> Callable:
-    """The request hook that enforces the boundary on the exact bytes being sent."""
+def wire_guard(provider: str, deny: Denylist, audit: AuditLog, endpoint: str,
+               allow_host: Callable[[str], bool], require_https: bool) -> Callable:
+    """The request hook that enforces the boundary on the request exactly as it will be
+    sent: where it goes, every header, and every byte of the body."""
+    want = urlsplit(endpoint)
+    want_place = (want.scheme, want.port or DEFAULT_PORTS.get(want.scheme), want.path)
+
     def hook(request) -> None:
-        url = str(request.url)
+        url = request.url
+        netloc = url.netloc.decode("ascii", "replace")
         try:
-            if not allow_host(request.url.host):
-                raise BoundaryViolation(f"host {request.url.host!r} is not allowed for provider {provider}")
-            if require_https and request.url.scheme != "https":
+            if not allow_host(url.host):
+                raise BoundaryViolation(f"host {url.host!r} is not allowed for provider {provider}")
+            if require_https and url.scheme != "https":
                 raise BoundaryViolation(f"provider {provider} must use HTTPS")
-            if request.method != "POST" or not request.url.path.endswith("/v1/messages"):
-                raise BoundaryViolation(f"only POST /v1/messages is allowed, not {request.method} {request.url.path}")
+            place = (url.scheme, url.port or DEFAULT_PORTS.get(url.scheme), url.path)
+            if request.method != "POST" or place != want_place or url.query not in ALLOWED_QUERIES or url.userinfo:
+                # The path and query are not quoted: they are what is being refused.
+                raise BoundaryViolation(f"only POST {endpoint} is allowed, with no query string or user name")
             body = request.read()
+            check_wire_headers(request.headers.multi_items(), deny, host=netloc, body_length=len(body))
             check_wire_body(body, deny)
         except BoundaryViolation as exc:
-            audit.blocked(provider, url, str(exc))
+            audit.blocked(provider, f"{url.scheme}://{netloc}", str(exc))     # never the path, query or body
             raise
-        audit.sent(provider, url, body)
+        audit.sent(provider, str(url), dict(request.headers.items()), body)
     return hook
 
 
@@ -127,7 +144,7 @@ class _MessagesProvider:
         self.effort = effort
         self.fallbacks = fallbacks
         self._anthropic = anthropic
-        hook = wire_guard(self.name, deny, audit, allow_host, require_https)
+        hook = wire_guard(self.name, deny, audit, self.endpoint, allow_host, require_https)
         # Redirects are not followed, so a 3xx answer cannot send the body on to another host
         # (the hook would block a request to another host anyway).
         http_client = anthropic.DefaultHttpxClient(

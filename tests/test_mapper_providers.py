@@ -11,6 +11,8 @@ anthropic = pytest.importorskip("anthropic")
 httpx = pytest.importorskip("httpx2")
 
 from taxfiling.mapper import AuditLog, BoundaryViolation, prepare  # noqa: E402
+from taxfiling.mapper.audit import CREDENTIAL_PLACEHOLDER  # noqa: E402
+from taxfiling.mapper.boundary import CREDENTIAL_HEADERS  # noqa: E402
 from taxfiling.mapper.providers import (  # noqa: E402
     ClaudeProvider, LocalModelProvider, OfflineProvider, ProviderError, is_loopback,
 )
@@ -73,8 +75,14 @@ def test_claude_request_is_checked_logged_and_clean(messy, tmp_path, no_network)
 
     entries = [json.loads(line) for line in log.read_text().splitlines()]
     assert [e["event"] for e in entries] == ["request_sent", "response_received"]
-    assert entries[0]["body"].encode() == wire            # the log holds the exact bytes sent
-    assert FAKE_KEY not in log.read_text()                 # headers, and so the API key, are never logged
+    # The log holds the request as it reached the network: the URL, every header, the exact body.
+    assert entries[0]["url"] == str(request.url)
+    assert entries[0]["body"].encode() == wire
+    sent_headers = dict(request.headers.items())
+    assert any(name in CREDENTIAL_HEADERS for name in sent_headers)
+    assert entries[0]["headers"] == {name: CREDENTIAL_PLACEHOLDER if name in CREDENTIAL_HEADERS else value
+                                     for name, value in sent_headers.items()}
+    assert FAKE_KEY not in log.read_text()                 # the one thing left out is the API key
 
 
 def test_the_wire_guard_stops_a_request_that_skips_build_payload(messy, tmp_path):
@@ -91,6 +99,51 @@ def test_the_wire_guard_stops_a_request_that_skips_build_payload(messy, tmp_path
     assert isinstance(info.value.__cause__, BoundaryViolation)
     text = log.read_text()
     assert "request_blocked" in text and w.ssn[-4:] not in text and w.last_name not in text
+
+
+@pytest.mark.parametrize("where", ["query string", "extra header", "header name", "header value",
+                                   "path", "user name in the URL"])
+def test_the_wire_guard_checks_the_url_and_headers_not_only_the_body(messy, tmp_path, where):
+    """Workbook data put anywhere in a request, not just in its body, is stopped before the
+    transport, and neither the log nor the error repeats it."""
+    api = FakeAPI("{}")
+    log = tmp_path / "audit.jsonl"
+    provider = ClaudeProvider(messy.deny, AuditLog(log), api_key=FAKE_KEY, transport=api.transport())
+    w = make_report(2025).employees[0]
+    dashed = f"{w.ssn[:3]}-{w.ssn[3:5]}-{w.ssn[5:]}"
+    client, extra = provider.client, {}
+    if where == "query string":
+        extra = {"extra_query": {"employee": dashed}}
+    elif where == "extra header":
+        extra = {"extra_headers": {"x-employee": w.last_name}}
+    elif where == "header name":
+        extra = {"extra_headers": {f"x-stainless-{w.ssn}": "1"}}
+    elif where == "header value":
+        extra = {"extra_headers": {"anthropic-beta": w.last_name}}
+    elif where == "path":
+        client = client.with_options(base_url=f"https://api.anthropic.com/{w.ssn}")
+    else:
+        client = client.with_options(base_url=f"https://{w.last_name}@api.anthropic.com")
+    with pytest.raises(anthropic.APIConnectionError) as info:
+        client.messages.create(model="claude-opus-5-5", max_tokens=10,
+                               messages=[{"role": "user", "content": "hi"}], **extra)
+    assert api.requests == []                              # nothing reached the network
+    assert isinstance(info.value.__cause__, BoundaryViolation)
+    text, error = log.read_text(), str(info.value.__cause__)
+    assert "request_blocked" in text
+    for value in (w.ssn, dashed, w.ssn[-4:], w.last_name):
+        assert value not in text and value not in error
+
+
+def test_a_login_profiles_headers_pass_the_guard(messy):
+    """`ant auth login` adds a workspace ID header and an OAuth flag to anthropic-beta.
+    Neither comes from the workbook, so neither stops the request."""
+    api = FakeAPI(expected_answer(messy))
+    provider = ClaudeProvider(messy.deny, AuditLog(None), api_key=FAKE_KEY, transport=api.transport())
+    client = provider.client.with_options(default_headers={"anthropic-workspace-id": "wrkspc_01Ab23456cDe"})
+    client.messages.create(model="claude-opus-5-5", max_tokens=10, messages=[{"role": "user", "content": "hi"}],
+                           extra_headers={"anthropic-beta": "server-side-fallback-2026-07-01,oauth-2025-04-20"})
+    assert len(api.requests) == 1 and api.requests[0].headers["anthropic-workspace-id"] == "wrkspc_01Ab23456cDe"
 
 
 def test_missing_credentials_send_nothing(messy, monkeypatch, tmp_path):

@@ -10,8 +10,9 @@ Data flow (see the README section "AI column mapping and the privacy boundary"):
         |
     build_payload  ----- check #1: patterns + denylist on the payload
         |
-    provider.propose --- check #2: host allow list + patterns + denylist on the exact
-        |                HTTP body, inside the HTTP client; then the audit log
+    provider.propose --- check #2, inside the HTTP client, on the request exactly as it
+        |                will be sent: the URL, every header and every byte of the body;
+        |                then the audit log
         v
     check_proposal  ---- the answer is untrusted: ids, fields, required fields,
         |                and each column's profile must fit its field
@@ -41,9 +42,10 @@ class Prepared:
 
 def fixed_words() -> set[str]:
     """Every string the program itself sends that could equal a spreadsheet label: the field
-    catalog, the keys and labels of a column profile, and the literal values in the schema."""
+    catalog, the keys and labels of a column profile, the literal values in the schema, and
+    the flag values in the SDK's headers (a TRUE/FALSE column is not personal data)."""
     words = {f["field"] for f in catalog()} | {f["description"] for f in catalog()}
-    return words | PROFILE_LABELS | {"high", "medium", "low", "object", "string", "array"}
+    return words | PROFILE_LABELS | {"high", "medium", "low", "object", "string", "array", "true", "false"}
 
 
 def fixed_text() -> str:

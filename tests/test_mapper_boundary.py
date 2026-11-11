@@ -167,6 +167,34 @@ def test_wire_check_reads_inside_the_user_message():
             check_wire_body(json.dumps(body).encode(), deny)
 
 
+def test_wire_headers_allow_only_the_sdks_own_headers_with_clean_values():
+    """The SDK's real headers pass, even when an SSN ends in the API version's year (2026)
+    and a column holds TRUE/FALSE. Any other header, or workbook data in a name or value, is
+    refused without being quoted. Only the values from your login are not checked."""
+    from taxfiling.mapper import fixed_text, fixed_words
+    from taxfiling.mapper.boundary import check_wire_headers
+    grid = profile.Grid({"W2": [("SSN", "Last", "Plan"), ("618-24-2026", "Valdez", "FALSE"),
+                                ("212-55-1021", "Okafor", "TRUE")]})
+    deny = Denylist.from_grid(grid, public=fixed_words(), public_text=fixed_text())
+    sdk = [("host", "api.anthropic.com"), ("accept", "application/json"), ("content-type", "application/json"),
+           ("user-agent", "Anthropic/Python 2.6.0"), ("x-stainless-async", "false"), ("x-stainless-os", "Linux"),
+           ("anthropic-version", "2026-10-21"), ("anthropic-beta", "server-side-fallback-2026-07-01"),
+           ("authorization", "Bearer sk-ant-api03-12345678"), ("anthropic-workspace-id", "wrkspc_01Ab23456c"),
+           ("content-length", "15571")]
+    check_wire_headers(sdk, deny, host="api.anthropic.com", body_length=15571)
+    for extra, reason in [(("x-employee", "1"), "not a header this program sends"),
+                          (("x-stainless-os", "Valdez"), "equal to a cell value"),
+                          (("anthropic-beta", "618-24-2026"), "shaped like an SSN"),
+                          (("x-stainless-618242026", "1"), "a header name contains a run of 5 or more digits")]:
+        with pytest.raises(BoundaryViolation, match=reason) as info:
+            check_wire_headers(sdk + [extra], deny, host="api.anthropic.com", body_length=15571)
+        assert "Valdez" not in str(info.value) and "618" not in str(info.value)
+    with pytest.raises(BoundaryViolation, match="content-length"):
+        check_wire_headers(sdk, deny, host="api.anthropic.com", body_length=15570)
+    with pytest.raises(BoundaryViolation, match="host"):
+        check_wire_headers(sdk, deny, host="collector.example.net", body_length=15571)
+
+
 def test_wire_check_refuses_numbers_that_are_not_finite():
     deny = Denylist.from_grid(profile.Grid({"W2": [("SSN",), ("618-24-9073",)]}))
     with pytest.raises(BoundaryViolation, match="not finite"):

@@ -200,28 +200,30 @@ the one judgment call in this pipeline, and it is the only part a language model
 Everything that touches a Social Security number stays deterministic, local Python.
 
 ```text
- workbook (.xlsx) ─► every cell, in memory on this computer ───────────────────┐
-        │                         │                                             │
-        │                  denylist: every cell value                          │
-        ▼                         │                                             │
- profile: headers, types,         │                                             │
- shapes (###-##-####, Aa, #.##)   │                                             │
-        │                         ▼                                             │
-        ├─► CHECK 1  build_payload(): patterns + denylist on the payload        │
-        │                                                                       │
-        ├─► CHECK 2  inside the HTTP client, on the exact bytes about to go:     │
-        │            host allow list, HTTPS, POST /v1/messages,                  │
-        │            patterns + denylist  ──► audit log (exact bytes)            │
-        ▼                                                                       │
- ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ the only thing that leaves the machine ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ │
- Claude (api.anthropic.com) or a local model (loopback only) or no model        │
-        │  answer: {field -> column id}                                         │
-        ▼                                                                       │
- CHECK 3  untrusted answer: known ids and fields only, each column's            │
-          shape must fit its field, required fields present                     │
-        ▼                                                                       │
- mapping JSON (header names only) ─► a person reviews it                         │
-        ▼                                                                       ▼
+ workbook (.xlsx) ─► every cell, in memory on this computer ──────────────────────┐
+        │                         │                                               │
+        │                  denylist: every cell value                             │
+        ▼                         │                                               │
+ profile: headers, types,         │                                               │
+ shapes (###-##-####, Aa, #.##)   │                                               │
+        │                         ▼                                               │
+        ├─► CHECK 1  build_payload(): patterns + denylist on the payload          │
+        │                                                                         │
+        ├─► CHECK 2  inside the HTTP client, on the request about to go:          │
+        │            only POST to https://api.anthropic.com/v1/messages (or       │
+        │            loopback for a local model), only the SDK's own headers,     │
+        │            patterns + denylist on every header and the whole body       │
+        │            ──► audit log: URL, headers, exact body (never the key)      │
+        ▼                                                                         │
+ ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ the only thing that leaves the machine ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ │
+ Claude (api.anthropic.com) or a local model (loopback only) or no model          │
+        │  answer: {field -> column id}                                           │
+        ▼                                                                         │
+ CHECK 3  untrusted answer: known ids and fields only, each column's              │
+          shape must fit its field, required fields present                       │
+        ▼                                                                         │
+ mapping JSON (header names only) ─► a person reviews it                          │
+        ▼                                                                         ▼
  `taxfiling w2 --mapping ...`: reader + writer + round-trip checker on the full rows
 ```
 
@@ -233,7 +235,8 @@ Everything that touches a Social Security number stays deterministic, local Pyth
 | Cell types per column (`text`, `integer`, `decimal`, `date`) and fill counts | SSNs, names, addresses, ZIP codes, EINs, state account numbers, amounts |
 | Up to three value *shapes* per column: letters collapsed to `A`/`a`/`Aa`, digits to `#` | The last four digits of an SSN (shapes have no digits at all) |
 | Labels like `us_state_code` when *every* value is in a public list | The values behind those labels |
-| The fixed instructions and the W-2 field list | Your API key in a logged form (headers are never logged) |
+| The fixed instructions and the W-2 field list | Anything from the workbook in the URL or an HTTP header |
+| The SDK's own HTTP headers: SDK and Python versions, operating system, CPU type, and your API key to authenticate | Your API key in the audit log (a placeholder stands in for it) |
 
 This is the actual text sent for four columns of the messy example
 ([`examples/va_2025_messy/`](examples/va_2025_messy/)):
@@ -264,18 +267,28 @@ The rule is enforced by code that does not trust the code before it:
    letters and 4+ digits (a street address), no 4-digit number that is the end of a
    9-digit cell. A header or sheet name that fails is withheld before this point.
 3. **Check 2, on the wire.** The model providers ([`mapper/providers.py`](taxfiling/mapper/providers.py))
-   install a request hook in the HTTP client. After the SDK has turned the request into
-   bytes, and before any byte is sent, the hook checks the host (only `api.anthropic.com`
-   over HTTPS for Claude; only `localhost`/`127.0.0.1`/`::1` for a local model), the path
-   (`POST /v1/messages` only) and the body: the same checks as step 2, on every string in
-   the request, including each header inside the user message, which travels as JSON
-   inside a string. A failure stops the request; nothing is retried. Setting
-   `ANTHROPIC_BASE_URL` cannot redirect it.
-4. **Audit log of the exact bytes.** Only after check 2 passes is the body written to
-   `mapping-audit.jsonl`, with its SHA-256, followed by the model's answer. HTTP headers,
-   where the API key travels, are never logged; a blocked request is logged with its
-   reason, never its body. The mapping file records the payload hash, so each mapping
-   can be traced to the request that produced it.
+   install a request hook in the HTTP client. After the SDK has built the request, and
+   before any byte is sent, the hook checks all of it, not only the body:
+   * **where it goes:** only `POST https://api.anthropic.com/v1/messages` for Claude (a
+     local model: the same path on `localhost`, `127.0.0.1` or `::1`), with no query
+     string and no user name in the URL;
+   * **the headers:** only the ones the SDK itself sends (its version, your operating
+     system and Python version, timeouts, the API version). `Host` and `Content-Length`
+     must match the request, and every other name and value gets the checks from check 1
+     (all but the last-4 comparison, since the API version header is a date). The only
+     values not compared are the ones from your Anthropic login: the API key and, with
+     an `ant auth login` profile, your workspace ID;
+   * **the body:** the checks from check 1 on every string and number, including each
+     column header inside the user message, which travels as JSON inside a string.
+
+   A failure stops the request; nothing is retried. Setting `ANTHROPIC_BASE_URL` cannot
+   redirect it.
+4. **Audit log of exactly what was sent.** Only after check 2 passes is the request
+   written to `mapping-audit.jsonl`: the URL, every header and the exact body with its
+   SHA-256, followed by the model's answer. The API key is the one thing left out (a
+   placeholder stands in for it). A blocked request is logged with its reason and host
+   only, never its path, headers or body. The mapping file records the payload hash, so
+   each mapping can be traced to the request that produced it.
 5. **The answer is untrusted.** The answer format lists the real column ids, so the model
    can only name columns that exist; [`mapper/proposal.py`](taxfiling/mapper/proposal.py)
    checks it again locally and compares each column's shape with its field (an SSN column
@@ -330,12 +343,16 @@ correct answer gives the same result.
   refused, and the error message itself quotes no data. Headers holding a name (alone or
   inside a longer header), phone number or e-mail, and a sheet named after an SSN, are
   withheld. Each kind of data is blocked by the wire check, including in JSON keys,
-  numbers and headers inside the user message.
+  numbers and headers inside the user message. Of the HTTP headers, only the SDK's own
+  pass (even when an SSN ends in the API version's year), and workbook data in any
+  header's name or value is refused.
 * [`tests/test_mapper_providers.py`](tests/test_mapper_providers.py) (against a mock HTTP
-  transport, with sockets disabled): the bytes that reach the transport are clean and equal
-  the audit log entry; the API key is not in the log; a request built by calling the SDK
-  directly with an SSN in it never reaches the transport; `ANTHROPIC_BASE_URL` and a moved
-  client cannot change the host; a "local" model on another machine is refused.
+  transport, with sockets disabled): the request that reaches the transport is clean, and
+  its URL, headers and body equal the audit log entry, except the API key, which is not in
+  the log; a request built by calling the SDK directly with an SSN in it never reaches the
+  transport, and neither does data put in the query string, the path, a user name in the
+  URL, or a header's name or value; `ANTHROPIC_BASE_URL` and a moved client cannot change
+  the host; a "local" model on another machine is refused.
 * [`tests/test_mapper_proposal.py`](tests/test_mapper_proposal.py): unknown sheets, columns,
   fields, duplicates and columns from another sheet are refused; swapped columns are flagged.
 * [`tests/test_mapper_end_to_end.py`](tests/test_mapper_end_to_end.py): messy workbook to

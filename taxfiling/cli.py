@@ -203,7 +203,9 @@ def cmd_map(args) -> int:
         print("\n--- system prompt ---\n" + payload.system)
         print("--- user message ---\n" + payload.user)
         print("--- answer format (JSON schema) ---\n" + json.dumps(payload.response_schema, indent=1))
-        print("\nDry run: nothing was sent. These are the exact texts a model would receive.")
+        print("\nDry run: nothing was sent. These are the exact texts a model would receive. The request would "
+              "also carry the SDK's standard HTTP headers (its version, your operating system, CPU type and "
+              "Python version) and your API key.")
         return 0
 
     audit = AuditLog(args.log)
@@ -233,7 +235,7 @@ def cmd_map(args) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     if args.log:
-        print(f"Audit log: {args.log} (what was sent, byte for byte, and the answer)")
+        print(f"Audit log: {args.log} (the request exactly as sent, except the API key, and the answer)")
 
     mapping, review = check_proposal(answer, profile)
     print(format_review(review, provider.name))
@@ -313,7 +315,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="local model server speaking the Anthropic Messages API (loopback only)")
     mp.add_argument("--out", help="mapping file to write (default: <input name>.mapping.json)")
     mp.add_argument("--log", default="mapping-audit.jsonl",
-                    help="audit log of every request sent, byte for byte (default mapping-audit.jsonl)")
+                    help="audit log of every request sent: its URL, its headers except the API key, and the "
+                         "exact body (default mapping-audit.jsonl)")
     mp.add_argument("--dry-run", action="store_true", help="print exactly what would be sent, and send nothing")
     mp.add_argument("--yes", action="store_true", help="send without asking")
     mp.add_argument("--allow-incomplete", action="store_true",

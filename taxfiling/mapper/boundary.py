@@ -1,10 +1,10 @@
 """The privacy boundary: what may leave this computer, and the check that enforces it.
 
 Only an OutboundPayload can be given to a model, and only build_payload() makes one.
-The same check then runs a second time on the exact bytes of the HTTP request, inside
-the HTTP client, after the SDK has serialized it and just before it is sent (see
-providers.py). A request that fails is never sent; the program stops with
-BoundaryViolation.
+The same check then runs a second time on the HTTP request exactly as it will be sent,
+inside the HTTP client, after the SDK has serialized it and just before it is sent (see
+providers.py): its body with check_wire_body(), its headers with check_wire_headers().
+A request that fails is never sent; the program stops with BoundaryViolation.
 
 The check does not trust the code that built the payload. It is given every cell of
 the workbook (the denylist) and looks for them in the outgoing text:
@@ -121,8 +121,10 @@ class Denylist:
                    frozenset(last4), cells)
 
 
-def text_problem(text: str, deny: Denylist) -> str | None:
-    """Why this string may not leave the machine, or None. Never quotes the value."""
+def text_problem(text: str, deny: Denylist, last4: bool = True) -> str | None:
+    """Why this string may not leave the machine, or None. Never quotes the value.
+    last4=False skips the comparison of 4-digit numbers with SSN last-4s (used for HTTP
+    headers, where the API version is a date such as 2026-10-21)."""
     for pattern, label in PATTERNS:
         if pattern.search(text):
             return f"contains {label}"
@@ -133,7 +135,7 @@ def text_problem(text: str, deny: Denylist) -> str | None:
         return REASON_CONTAINS
     if deny.phrases and deny.phrases.search(norm):
         return REASON_PHRASE
-    for run in re.findall(r"(?<!\d)\d{4}(?!\d)", text):
+    for run in re.findall(r"(?<!\d)\d{4}(?!\d)", text) if last4 else ():
         if run in deny.last4:
             return REASON_LAST4
     return None
@@ -199,6 +201,49 @@ def check_wire_body(body: bytes, deny: Denylist) -> None:
     except (UnicodeDecodeError, json.JSONDecodeError):
         raise BoundaryViolation("the request body is not JSON, so it cannot be checked; not sent") from None
     problems = check_document(doc, deny)
+    if problems:
+        raise BoundaryViolation("request blocked before sending; " + "; ".join(problems[:10]))
+
+
+# The headers a request may carry: the HTTP client's standard ones, and the SDK's own, which
+# start with x-stainless- or anthropic- (the SDK's version, the operating system, CPU and
+# Python version, timeouts, the API version). Any other header is refused.
+WIRE_HEADERS = frozenset({"host", "accept", "accept-encoding", "connection", "content-type", "content-length",
+                          "user-agent"})
+WIRE_HEADER_PREFIXES = ("x-stainless-", "anthropic-")
+# Values the SDK takes from your Anthropic login, not from the workbook, and that are not
+# compared with it: the credential (an API key or token may hold 5 digits in a row), which is
+# never logged, and the account IDs a login profile adds (logged like any other header).
+CREDENTIAL_HEADERS = frozenset({"authorization", "x-api-key"})
+ACCOUNT_HEADERS = CREDENTIAL_HEADERS | {"anthropic-workspace-id", "anthropic-user-profile-id"}
+
+
+def check_wire_headers(headers, deny: Denylist, host: str, body_length: int) -> None:
+    """The last check on the headers about to be sent, as (name, value) pairs. Raises
+    BoundaryViolation.
+
+    Only the headers above may be sent. Host must name the request's own host, and
+    Content-Length the body's real length. Every other name and value, except those from
+    your login, gets the same check as a string in the body, except that 4-digit numbers
+    are not compared with SSN last-4s, because the API version header is a date."""
+    problems = []
+    for name, value in headers:
+        name = name.lower()
+        if name in ACCOUNT_HEADERS:
+            continue
+        name_problem = text_problem(name, deny, last4=False)
+        if name_problem:
+            problems.append(f"a header name {name_problem}")
+        elif name not in WIRE_HEADERS and not name.startswith(WIRE_HEADER_PREFIXES):
+            problems.append(f"header {name!r}: not a header this program sends")
+        elif name == "host":
+            if value != host:
+                problems.append("header 'host': does not name the request's host")
+        elif name == "content-length":
+            if value != str(body_length):
+                problems.append("header 'content-length': does not match the body")
+        elif value_problem := text_problem(value, deny, last4=False):
+            problems.append(f"header {name!r}: the value {value_problem}")
     if problems:
         raise BoundaryViolation("request blocked before sending; " + "; ".join(problems[:10]))
 
