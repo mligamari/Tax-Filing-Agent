@@ -14,3 +14,6 @@ private/
 *.real.xlsx
 /W2 REPORT*.txt
 /output/
+
+# Audit log written by `taxfiling map` (no cell values, but keep it out of git)
+/mapping-audit.jsonl
