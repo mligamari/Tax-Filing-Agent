@@ -1,6 +1,6 @@
 """Format-neutral data model for one employer's wage report.
 
-Readers (spreadsheet, CSV, later the AI column mapper) produce these objects;
+Readers (the spreadsheet reader, driven by a column mapping) produce these objects;
 format writers (EFW2, later ICESA) consume them. Amounts are Decimal dollars.
 """
 from __future__ import annotations

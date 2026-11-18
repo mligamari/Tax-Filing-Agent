@@ -4,10 +4,12 @@
     python -m taxfiling check "W2 REPORT 2025.txt" --state VA --input W2.xlsx
     python -m taxfiling show "W2 REPORT 2025.txt" --record RW --limit 2
     python -m taxfiling layout efw2_ty2025 --record RO
+    python -m taxfiling map --input export.xlsx [--ai none|claude|local] [--dry-run]
 
-Everything runs locally. Nothing here opens a network connection, and SSNs are
-masked in everything printed (the output file itself holds full SSNs, as the
-state requires).
+Everything runs locally, and SSNs are masked in everything printed (the output file
+itself holds full SSNs, as the state requires). The only command that can open a
+network connection is `map --ai claude` (or `--ai local`, to this computer only), and
+what it sends is limited to column headers and value shapes; see taxfiling/mapper/.
 """
 from __future__ import annotations
 
@@ -177,6 +179,89 @@ def cmd_layout(args) -> int:
     return 0
 
 
+def cmd_map(args) -> int:
+    # Imported here so the other commands never load the mapper or a network library.
+    import json
+
+    from .mapper import AuditLog, BoundaryViolation, check_proposal, format_review, prepare
+    from .mapper.providers import ClaudeProvider, LocalModelProvider, OfflineProvider, ProviderError
+
+    try:
+        prepared = prepare(args.input, args.sheet)
+    except BoundaryViolation as exc:
+        print(f"Stopped: {exc}", file=sys.stderr)
+        return 3
+    profile, payload = prepared.profile, prepared.payload
+    n_cols = sum(len(s.columns) for s in profile.sheets)
+    withheld = [f"{s.name}!{c.letter}" for s in profile.sheets for c in s.columns if c.withheld and c.header]
+    print(f"Profiled {len(profile.sheets)} sheet(s), {n_cols} column(s) of {args.input}")
+    print(f"Payload: {len(payload.system) + len(payload.user):,} characters of headers and value shapes, "
+          f"no cell values (checked against {prepared.deny.cells:,} cells); sha256 {payload.sha256[:16]}")
+    if withheld:
+        print(f"Headers withheld because they look like data: {', '.join(withheld)}")
+    if args.dry_run:
+        print("\n--- system prompt ---\n" + payload.system)
+        print("--- user message ---\n" + payload.user)
+        print("--- answer format (JSON schema) ---\n" + json.dumps(payload.response_schema, indent=1))
+        print("\nDry run: nothing was sent. These are the exact texts a model would receive. The request would "
+              "also carry the SDK's standard HTTP headers (its version, your operating system, CPU type and "
+              "Python version) and your API key.")
+        return 0
+
+    audit = AuditLog(args.log)
+    try:
+        if args.ai == "none":
+            provider = OfflineProvider(audit)
+        elif args.ai == "claude":
+            provider = ClaudeProvider(prepared.deny, audit, model=args.model or "claude-opus-5-5",
+                                      effort=args.effort)
+        else:
+            if not args.model:
+                raise SystemExit("--ai local needs --model (the local model's name, for example qwen3)")
+            provider = LocalModelProvider(prepared.deny, audit, model=args.model, base_url=args.local_url)
+        if args.ai != "none" and not args.yes:
+            question = f"Send this payload to {provider.endpoint}? Run with --dry-run to read it first. [y/N] "
+            if not sys.stdin.isatty():
+                print("Not sent: add --yes to send without asking.", file=sys.stderr)
+                return 1
+            if input(question).strip().lower() not in ("y", "yes"):
+                print("Not sent.")
+                return 1
+        answer = provider.propose(payload, profile)
+    except BoundaryViolation as exc:
+        print(f"Stopped at the privacy boundary, nothing was sent: {exc}", file=sys.stderr)
+        return 3
+    except ProviderError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if args.log:
+        print(f"Audit log: {args.log} (the request exactly as sent, except the API key, and the answer)")
+
+    mapping, review = check_proposal(answer, profile)
+    print(format_review(review, provider.name))
+    if mapping is None:
+        print("No mapping written: the answer failed the checks above.")
+        return 1
+    if not review.complete and not args.allow_incomplete:
+        print("No mapping written: required fields are missing. Map them by hand, or pass "
+              "--allow-incomplete to write the file and finish it in an editor.")
+        return 1
+    out = Path(args.out or f"{Path(args.input).stem}.mapping.json")
+    mapping = {
+        "description": f"Column mapping for {Path(args.input).name}, proposed by {provider.name}. "
+                       "Review every line before using it.",
+        "proposed_by": {"provider": provider.name, "model": getattr(provider, "model", None),
+                        "endpoint": provider.endpoint, "payload_sha256": payload.sha256,
+                        "audit_log": args.log, "warnings": review.warnings,
+                        "missing_required": review.missing_required},
+        **mapping,
+    }
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(mapping, indent=2) + "\n")
+    print(f"Wrote {out}. After checking it, use it with:  python -m taxfiling w2 --mapping {out} ...")
+    return 0 if review.complete else 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="taxfiling", description=__doc__.split("\n\n")[0])
     sub = p.add_subparsers(dest="command", required=True)
@@ -216,6 +301,27 @@ def build_parser() -> argparse.ArgumentParser:
     ly.add_argument("--record", help="only this record type")
     ly.add_argument("--unverified", action="store_true", help="only fields not confirmed against a spec")
     ly.set_defaults(func=cmd_layout)
+
+    mp = sub.add_parser("map", help="propose a column mapping for a spreadsheet (headers and shapes only)")
+    mp.add_argument("--input", required=True, help="workbook (.xlsx)")
+    mp.add_argument("--sheet", action="append", help="profile only this sheet (repeatable); sends less")
+    mp.add_argument("--ai", choices=["none", "claude", "local"], default="none",
+                    help="none: fixed rules, no network (default); claude: Anthropic API; "
+                         "local: a model on this computer")
+    mp.add_argument("--model", help="model name (claude: default claude-opus-5-5; local: required)")
+    mp.add_argument("--effort", default="medium", choices=["low", "medium", "high", "xhigh", "max"],
+                    help="Claude effort level (default medium)")
+    mp.add_argument("--local-url", default="http://localhost:11434",
+                    help="local model server speaking the Anthropic Messages API (loopback only)")
+    mp.add_argument("--out", help="mapping file to write (default: <input name>.mapping.json)")
+    mp.add_argument("--log", default="mapping-audit.jsonl",
+                    help="audit log of every request sent: its URL, its headers except the API key, and the "
+                         "exact body (default mapping-audit.jsonl)")
+    mp.add_argument("--dry-run", action="store_true", help="print exactly what would be sent, and send nothing")
+    mp.add_argument("--yes", action="store_true", help="send without asking")
+    mp.add_argument("--allow-incomplete", action="store_true",
+                    help="write the mapping even if required fields are missing")
+    mp.set_defaults(func=cmd_map)
     return p
 
 

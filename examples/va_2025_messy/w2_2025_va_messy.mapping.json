@@ -1,0 +1,83 @@
+{
+  "description": "Column mapping for w2_2025_va_messy.xlsx. Proposed by the no-model rules (`taxfiling map --ai none --allow-incomplete`), which could not tell 'St' from 'Work State'; those two lines were then added by hand after looking at the review table.",
+  "proposed_by": {
+    "provider": "none",
+    "model": null,
+    "endpoint": "no network: rules in taxfiling/mapper/heuristic.py",
+    "payload_sha256": "68d2e407fabcedb7fc0e9218960b6e1bc3530cedbf5467b24ba5f5bdfcbe83a8",
+    "audit_log": "mapping-audit.jsonl",
+    "warnings": [],
+    "missing_required": [],
+    "edited_by_hand": [
+      "state <- St",
+      "box15_state <- Work State"
+    ]
+  },
+  "sheet": "YE Export",
+  "header_row": 4,
+  "optional": [
+    "control_number",
+    "middle_name",
+    "suffix",
+    "box7_ss_tips",
+    "box8_allocated_tips",
+    "box10_dependent_care",
+    "box11_nonqualified",
+    "statutory_employee",
+    "retirement_plan",
+    "third_party_sick_pay"
+  ],
+  "columns": {
+    "control_number": "Emp ID",
+    "ssn": "Social Sec #",
+    "employer_ein": "FEIN",
+    "employer_name": "Company",
+    "employer_address": "Co Street",
+    "employer_city": "Co City",
+    "employer_state": "Co State",
+    "employer_zip": "Co Zip",
+    "first_name": "First",
+    "middle_name": "MI",
+    "last_name": "Last",
+    "suffix": "Sfx",
+    "address": "Home Street",
+    "city": "City",
+    "state": "St",
+    "zip": "Zip Code",
+    "box1_wages": "Fed Wages",
+    "box2_fed_tax": "Fed W/H",
+    "box3_ss_wages": "SS Wgs",
+    "box4_ss_tax": "SS W/H",
+    "box5_medicare_wages": "Medicare Wgs",
+    "box6_medicare_tax": "Medicare W/H",
+    "box7_ss_tips": "SS Tips",
+    "box8_allocated_tips": "Alloc Tips",
+    "box10_dependent_care": "Dep Care",
+    "box11_nonqualified": "NQ Plans",
+    "statutory_employee": "Stat Emp",
+    "retirement_plan": "Ret Plan",
+    "third_party_sick_pay": "3rd Party Sick",
+    "box15_state": "Work State",
+    "box15_state_id": "State Acct #",
+    "box16_state_wages": "State Wgs",
+    "box17_state_tax": "State W/H"
+  },
+  "box12": [
+    {
+      "code": "12A Cd",
+      "amount": "12A Amt"
+    },
+    {
+      "code": "12B Cd",
+      "amount": "12B Amt"
+    },
+    {
+      "code": "12C Cd",
+      "amount": "12C Amt"
+    },
+    {
+      "code": "12D Cd",
+      "amount": "12D Amt"
+    }
+  ]
+}

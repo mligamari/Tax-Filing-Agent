@@ -1,5 +1,5 @@
 {
-  "description": "Column mapping for the sample W-2 workbook layout (one row per employee, one column per W-2 box). The planned AI step will propose a file like this from column headers alone; the code below applies it to the full rows locally.",
+  "description": "Column mapping for the sample W-2 workbook layout (one row per employee, one column per W-2 box). `taxfiling map` proposes a file like this for other layouts, from column headers and value shapes alone; the reader applies it to the full rows locally.",
   "sheet": "W-2 Data",
   "header_row": 1,
   "optional": ["middle_name", "suffix", "box7_ss_tips", "box8_allocated_tips", "box10_dependent_care",

@@ -12,6 +12,8 @@ dependencies = ["openpyxl>=3.1"]
 
 [project.optional-dependencies]
 test = ["pytest>=7"]
+# Only for `taxfiling map --ai claude` or `--ai local`. Nothing else imports it.
+ai = ["anthropic>=2.6"]
 
 [project.scripts]
 taxfiling = "taxfiling.cli:main"

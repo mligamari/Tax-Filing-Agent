@@ -19,7 +19,11 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - run: python -m pip install -e ".[test]"
-      - run: python -m pytest -q
+      - name: Tests without the anthropic package (the core must not need it)
+        run: python -m pytest -q
+      - run: python -m pip install -e ".[test,ai]"
+      - name: Tests with the anthropic package (model providers against a mock transport)
+        run: python -m pytest -q
       - name: Rebuild the layout tables from SSA's spec text
         run: |
           for year in 2025 2026; do
@@ -33,3 +37,10 @@ jobs:
               --submitter examples/va_$year/submitter.json --out "/tmp/W2 REPORT $year.txt"
             cmp "/tmp/W2 REPORT $year.txt" "examples/va_$year/output/W2 REPORT $year.txt"
           done
+      - name: Map and write the messy example (offline rules plus the committed hand edits)
+        run: |
+          python -m taxfiling map --input examples/va_2025_messy/w2_2025_va_messy.xlsx --dry-run > /dev/null
+          python -m taxfiling w2 --state VA --input examples/va_2025_messy/w2_2025_va_messy.xlsx \
+            --submitter examples/va_2025/submitter.json \
+            --mapping examples/va_2025_messy/w2_2025_va_messy.mapping.json --out "/tmp/messy.txt"
+          cmp "/tmp/messy.txt" "examples/va_2025/output/W2 REPORT 2025.txt"

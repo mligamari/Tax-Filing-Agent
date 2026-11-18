@@ -1,9 +1,9 @@
 """Read W-2 rows from an Excel workbook using a column mapping.
 
 The mapping (see taxfiling/mappings/w2_standard.json) says which spreadsheet
-header holds which W-2 field. It is the only thing the planned AI step will
-produce, and it is produced from headers alone; this module applies it to the
-full rows on the local machine.
+header holds which W-2 field. It is the only thing the AI column mapper
+(taxfiling/mapper/) produces, from headers and value shapes alone; this module
+applies it to the full rows on the local machine.
 
 Excel quirks handled here, each reported as a warning rather than silently fixed:
   * SSNs or ZIP codes stored as numbers lose their leading zeros.
