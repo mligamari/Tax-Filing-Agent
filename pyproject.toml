@@ -22,7 +22,7 @@ taxfiling = "taxfiling.cli:main"
 include = ["taxfiling*"]
 
 [tool.setuptools.package-data]
-taxfiling = ["layouts/*.json", "mappings/*.json", "states/*.json"]
+taxfiling = ["layouts/*.json", "mappings/*.json", "states/*.json", "demo/static/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
