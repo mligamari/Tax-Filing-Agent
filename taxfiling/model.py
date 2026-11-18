@@ -52,6 +52,7 @@ class Employer:
     employment_code: str = "R"      # R = regular (Form 941)
     terminating_business: bool = False
     state_ids: dict[str, str] = field(default_factory=dict)  # state postal code -> state employer account
+    ui_accounts: dict[str, str] = field(default_factory=dict)  # state postal code -> unemployment-insurance account
 
 
 @dataclass
@@ -118,6 +119,8 @@ class QuarterlyWages:
     first_name: str
     middle_name: str
     last_name: str
+    suffix: str = ""
+    address: Address = field(default_factory=Address)   # filled from the W-2 sheet by SSN
     gross_wages: Decimal = Decimal(0)
     excess_wages: Decimal = Decimal(0)
     taxable_wages: Decimal = Decimal(0)
@@ -140,8 +143,9 @@ class QuarterlyReport:
     tax_year: int
     quarter: int                # 1-4
     state: str                  # postal code of the UI agency's state
-    employer: Employer          # employer.state_ids[state] holds the UI account number
+    employer: Employer          # employer.ui_accounts[state] holds the UI account number
     employees: list[QuarterlyWages]
+    submitter: Submitter | None = None
 
     @property
     def employed_12th_counts(self) -> tuple[int, int, int]:

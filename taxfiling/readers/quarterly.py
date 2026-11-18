@@ -98,3 +98,34 @@ def read_quarterly_workbook(path: str | Path, mapping: dict, tax_year: int,
     if not out:
         issues.error("workbook", f"no rows for {tax_year} quarter {quarter} in sheet '{sheet}'")
     return out, issues
+
+
+def load_quarterly_report(path: str | Path, state: str, tax_year: int, quarter: int,
+                          mapping: dict | None = None, w2_mapping: dict | None = None):
+    """A QuarterlyReport from a workbook that has both a W-2 sheet and a quarterly wages sheet.
+
+    The quarterly sheet gives the wages; the W-2 sheet gives the employer (name, EIN,
+    address) and each employee's address and name suffix, matched by SSN. Returns
+    (report, issues); the report has no submitter yet."""
+    from ..model import QuarterlyReport
+    from .excel import read_w2_workbook
+
+    mapping = mapping or load_mapping("quarterly_standard")
+    w2_mapping = w2_mapping or load_mapping("w2_standard")
+    employer, w2s, issues = read_w2_workbook(path, w2_mapping)
+    rows, q_issues = read_quarterly_workbook(path, mapping, tax_year, quarter)
+    issues.extend(q_issues)
+    by_ssn = {w.ssn: w for w in w2s if w.ssn}
+    for r in rows:
+        w2 = by_ssn.get(r.ssn)
+        if w2 is None:
+            issues.warning(r.where(), "no W-2 row with this SSN, so no address for this employee")
+            continue
+        r.address = w2.address
+        r.suffix = r.suffix or w2.suffix
+        r.middle_name = r.middle_name or w2.middle_name
+        if r.last_name.upper() != w2.last_name.upper() or r.first_name.upper() != w2.first_name.upper():
+            issues.error(r.where(), f"name differs from the W-2 row with the same SSN ({w2.where()})")
+    report = QuarterlyReport(tax_year=tax_year, quarter=quarter, state=state.upper(), employer=employer,
+                             employees=rows)
+    return report, issues

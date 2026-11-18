@@ -84,6 +84,42 @@ employees have qualified overtime (Box 12 code TT, new on the 2026 Form W-2), so
 file has six RO records. The new Box 14b tipped-occupation codes go in RW from 2026; a
 2025 file has no place for them, so they are reported instead.
 
+**Virginia quarterly unemployment-insurance (UI) wage file** (Virginia Employment
+Commission, VEC), **provisional**. Employers report each employee's wages to VEC every
+quarter; VEC's unemployment tax is based on them. VEC says it accepts files in SSA's EFW2
+format and in ICESA, but its own record layout is only available inside VEC's employer
+portal. Until it is in hand, this file follows SSA's generic definition of the RS (State)
+record, which SSA defines for quarterly UI reporting too:
+
+```text
+$ python -m taxfiling ui --state VA --quarter 2 \
+      --input examples/va_2025/w2_2025_va_synthetic.xlsx \
+      --submitter examples/va_2025/submitter.json
+
+Read 46 employees with 2025 Q2 wages for Blue Ridge Precision Components Inc from examples/va_2025/w2_2025_va_synthetic.xlsx
+...
+Wrote VEC UI 2025 Q2.txt (25,184 bytes) for Virginia (Virginia Employment Commission (VEC))
+Employees on the payroll on the 12th of each month: 43, 45, 44 (not in the file; see the profile notes)
+PROVISIONAL: built on SSA's generic RS record, not the state's own specification. Do not upload until the state's specification has been checked.
+Round-trip check: PASSED
+  Records: RA 1, RE 1, RS 46, RF 1
+  Compared with source: 46 employees, 184 fields
+  UI total wages (RS)         843,341.27
+  UI taxable wages (RS)        26,946.75
+```
+
+Each RS record carries the quarter (positions 197-202, e.g. `062025`), the employee's total
+and taxable UI wages (203-213, 214-224) and the employer's VEC account number (248-267).
+Wages come from the workbook's Quarterly Wages sheet; the employer and each employee's
+address come from the W-2 sheet, matched by SSN. `check-ui` re-reads a file on its own and
+compares it with the workbook, the same way `check` does for W-2 files.
+
+What is provisional, and listed in [`taxfiling/states/va.json`](taxfiling/states/va.json):
+the record set (RA, RE, one RS per employee, RF, with no RW or RT because those carry
+yearly federal W-2 amounts), the file name, the account number format, and where the
+"employed on the 12th" counts go (SSA's RS record has no field for them). When VEC's
+specification arrives, these change in that profile, not in the code.
+
 ## Install and run
 
 Requires Python 3.10 or newer.
@@ -106,6 +142,8 @@ python -m pytest
 | `w2` | Reads the workbook, validates it, builds the state file and runs the round-trip check on it. The file is saved only if there are no errors and the check passes. |
 | `check` | Checks any file against the layout and state rules. With `--input` it also compares every employee and amount with the source. |
 | `show` | Prints a file field by field with positions. SSNs are masked unless `--show-ssn` is given. |
+| `ui` | Writes a quarterly unemployment-insurance wage file for one quarter (`--quarter 1`-`4`) and runs its round-trip check. Virginia's is provisional (see above). |
+| `check-ui` | Checks a quarterly UI file; with `--input`, also compares every employee and amount with the workbook. |
 | `layout` | Lists a layout table, with the page of SSA's spec that defines each field. |
 | `map` | Proposes a column mapping for a spreadsheet laid out differently from the sample, with fixed rules (default, offline), Claude (`--ai claude`) or a model on your computer (`--ai local`). `--dry-run` prints exactly what would be sent. |
 
@@ -391,8 +429,11 @@ still the employer's decision.
   blank), and the state-defined RV record (Virginia defines none, so none is written).
 * **The mapper** reads one row per employee with one column per box. A sheet with one row
   per Box 12 entry, or names in a single "Last, First" column, needs reshaping first.
-* Next: Virginia Employment Commission quarterly UI wage file (the sample workbooks
-  already have a quarterly sheet), then ICESA, more states, and a simple local app.
+* **The VEC quarterly file is provisional**: it follows SSA's generic RS record until
+  VEC's own specification is available. Hire and separation dates and weeks worked are
+  left blank.
+* Next: confirm the VEC file against VEC's specification, then ICESA, more states, and a
+  simple local app.
 
 Before filing for real, upload a test file through the state's portal and compare
 it with SSA's free AccuWage tool. This project is a portfolio piece, not tax advice.
@@ -422,10 +463,13 @@ taxfiling/
   states/              per-state rules (JSON)
   mappings/            spreadsheet column mappings (JSON)
   readers/excel.py     workbook -> W-2 model
+  readers/quarterly.py workbook -> quarterly UI wages
   mapper/              column mapper: profile, privacy boundary, providers, answer checks
   validate.py          SSN, EIN, address and amount checks
   formats/efw2.py      W-2 model -> EFW2 records
+  formats/efw2_quarterly.py  quarterly UI wages -> EFW2 RS records
   check.py             round-trip checker
+  check_quarterly.py   round-trip checker for quarterly UI files
   cli.py               command line
 specs/ssa/             text of SSA's EFW2 specifications for 2025 and 2026
 tools/                 spec-text parser and layout builder

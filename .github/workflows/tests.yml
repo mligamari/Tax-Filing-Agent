@@ -37,6 +37,16 @@ jobs:
               --submitter examples/va_$year/submitter.json --out "/tmp/W2 REPORT $year.txt"
             cmp "/tmp/W2 REPORT $year.txt" "examples/va_$year/output/W2 REPORT $year.txt"
           done
+      - name: Write and check the provisional Virginia quarterly UI examples from scratch
+        run: |
+          for year in 2025 2026; do
+            for q in 1 2 3 4; do
+              python -m taxfiling ui --state VA --year $year --quarter $q \
+                --input examples/va_$year/w2_${year}_va_synthetic.xlsx \
+                --submitter examples/va_$year/submitter.json --out "/tmp/VEC UI $year Q$q.txt"
+              cmp "/tmp/VEC UI $year Q$q.txt" "examples/va_$year/output/VEC UI $year Q$q.txt"
+            done
+          done
       - name: Map and write the messy example (offline rules plus the committed hand edits)
         run: |
           python -m taxfiling map --input examples/va_2025_messy/w2_2025_va_messy.xlsx --dry-run > /dev/null
