@@ -1,0 +1,21 @@
+{
+  "description": "Column mapping for the sample Quarterly Wages sheet (one row per employee per quarter with wages). The reader keeps the rows of the requested year and quarter.",
+  "sheet": "Quarterly Wages",
+  "header_row": 1,
+  "optional": ["middle_name", "control_number"],
+  "columns": {
+    "control_number": "Control Number",
+    "ssn": "Employee SSN",
+    "first_name": "Employee First Name",
+    "middle_name": "Employee Middle Initial",
+    "last_name": "Employee Last Name",
+    "tax_year": "Tax Year",
+    "quarter": "Quarter",
+    "employed_12th_m1": "Employed on 12th - Month 1",
+    "employed_12th_m2": "Employed on 12th - Month 2",
+    "employed_12th_m3": "Employed on 12th - Month 3",
+    "gross_wages": "VA UI Gross Wages",
+    "excess_wages": "VA UI Excess Wages",
+    "taxable_wages": "VA UI Taxable Wages"
+  }
+}
