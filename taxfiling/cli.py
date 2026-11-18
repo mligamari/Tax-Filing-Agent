@@ -2,6 +2,8 @@
 
     python -m taxfiling w2 --state VA --input W2.xlsx --submitter submitter.json [--year 2025]
     python -m taxfiling check "W2 REPORT 2025.txt" --state VA --input W2.xlsx
+    python -m taxfiling ui --state VA --quarter 1 --input W2.xlsx --submitter submitter.json [--year 2025]
+    python -m taxfiling check-ui "VEC UI 2025 Q1.txt" --state VA --quarter 1 [--input W2.xlsx --submitter ...]
     python -m taxfiling show "W2 REPORT 2025.txt" --record RW --limit 2
     python -m taxfiling layout efw2_ty2025 --record RO
     python -m taxfiling map --input export.xlsx [--ai none|claude|local] [--dry-run]
@@ -20,12 +22,15 @@ from decimal import Decimal
 from pathlib import Path
 
 from .check import check_file, format_report
+from .check_quarterly import check_quarterly_file
 from .config import apply_employer_settings, load_submitter
 from .formats.efw2 import build_efw2
+from .formats.efw2_quarterly import build_efw2_quarterly
 from .layout import available_layouts, load_layout
 from .model import WageReport
 from .privacy import mask_ssn
 from .readers.excel import load_mapping, read_w2_workbook
+from .readers.quarterly import load_quarterly_report
 from .states import available_states, report_profile
 from .validate import validate_report
 
@@ -113,6 +118,67 @@ def cmd_w2(args) -> int:
           f"({profile['agency']}, {profile['portal']})")
     print(format_report(result, title="Round-trip check"))
     return 0
+
+
+def _load_quarterly(args, profile) -> tuple:
+    report, issues = load_quarterly_report(args.input, profile["state"], profile["tax_year"], args.quarter,
+                                           load_mapping(args.mapping), load_mapping(args.w2_mapping))
+    if args.submitter:
+        submitter, employer_settings = load_submitter(args.submitter)
+        apply_employer_settings(report.employer, employer_settings, submitter)
+        report.submitter = submitter
+    return report, issues
+
+
+def cmd_ui(args) -> int:
+    profile = report_profile(args.state, "ui_quarterly", args.year)
+    layout = load_layout(profile["layout"])
+    if not args.submitter:
+        raise SystemExit("--submitter is required to write a file (it supplies the RA record and UI account)")
+    report, issues = _load_quarterly(args, profile)
+    print(f"Read {len(report.employees)} employees with {report.tax_year} Q{report.quarter} wages for "
+          f"{report.employer.name} from {args.input}")
+    if issues.errors:
+        _print_issues("Input problems", issues, limit=args.max_messages)
+        print("No file written.")
+        return 1
+    text, build_issues = build_efw2_quarterly(report, layout, profile)
+    issues.extend(build_issues)
+    _print_issues("Input notes", issues, limit=args.max_messages)
+    if text is None:
+        print("No file written.")
+        return 1
+    data = text.encode("ascii")
+    result = check_quarterly_file(data, layout, profile, report.tax_year, report.quarter, source=report)
+    out = Path(args.out or profile["default_file_name"].format(year=report.tax_year, quarter=report.quarter))
+    if not result.ok:
+        print(format_report(result, title="Round-trip check"))
+        print(f"No file written: the round-trip check failed, so {out} was not created or updated.")
+        return 1
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_bytes(data)
+    m1, m2, m3 = report.employed_12th_counts
+    print(f"Wrote {out} ({len(data):,} bytes) for {profile['state_name']} ({profile['agency']})")
+    print(f"Employees on the payroll on the 12th of each month: {m1}, {m2}, {m3} (not in the file; see the "
+          "profile notes)")
+    if profile.get("provisional"):
+        print("PROVISIONAL: built on SSA's generic RS record, not the state's own specification. "
+              "Do not upload until the state's specification has been checked.")
+    print(format_report(result, title="Round-trip check"))
+    return 0
+
+
+def cmd_check_ui(args) -> int:
+    profile = report_profile(args.state, "ui_quarterly", args.year or _year_in_file(Path(args.file)))
+    layout = load_layout(profile["layout"])
+    source = None
+    if args.input:
+        source, read_issues = _load_quarterly(args, profile)
+        _print_issues("Input notes", read_issues, limit=args.max_messages)
+    result = check_quarterly_file(Path(args.file), layout, profile, profile["tax_year"], args.quarter,
+                                  source=source)
+    print(format_report(result, title=f"Check of {args.file}"))
+    return 0 if result.ok else 1
 
 
 def cmd_check(args) -> int:
@@ -280,6 +346,29 @@ def build_parser() -> argparse.ArgumentParser:
     source_args(w2, required=True)
     w2.add_argument("--out", help="output path (default: the state's recommended file name)")
     w2.set_defaults(func=cmd_w2)
+
+    def ui_args(sp, required: bool):
+        sp.add_argument("--state", required=True, choices=available_states())
+        sp.add_argument("--quarter", required=True, type=int, choices=[1, 2, 3, 4])
+        sp.add_argument("--input", required=required,
+                        help="workbook with a W-2 sheet and a quarterly wages sheet (.xlsx)")
+        sp.add_argument("--mapping", default="quarterly_standard",
+                        help="quarterly wages column mapping (default: quarterly_standard)")
+        sp.add_argument("--w2-mapping", default="w2_standard",
+                        help="W-2 sheet column mapping, for the employer and addresses (default: w2_standard)")
+        sp.add_argument("--submitter", help="submitter settings JSON (RA record, employer UI account)")
+        sp.add_argument("--year", type=int, help="tax year (default: the state's default year, or the file's)")
+        sp.add_argument("--max-messages", type=int, default=40, help="cap on printed input notes")
+
+    ui = sub.add_parser("ui", help="write a state quarterly unemployment-insurance wage file and check it")
+    ui_args(ui, required=True)
+    ui.add_argument("--out", help="output path (default: the profile's file name)")
+    ui.set_defaults(func=cmd_ui)
+
+    cu = sub.add_parser("check-ui", help="check a quarterly UI file; with --input, also compare with the source")
+    cu.add_argument("file")
+    ui_args(cu, required=False)
+    cu.set_defaults(func=cmd_check_ui)
 
     ck = sub.add_parser("check", help="check a file; with --input, also compare it with the source")
     ck.add_argument("file")

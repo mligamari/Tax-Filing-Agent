@@ -20,6 +20,10 @@
   },
   "employer": {
     "kind_of_employer": "N",
-    "employment_code": "R"
-  }
+    "employment_code": "R",
+    "ui_accounts": {
+      "VA": "0918274"
+    }
+  },
+  "_note_ui": "ui_accounts: the employer's state unemployment-insurance account (VEC account number on the workbook's Employer sheet), used by quarterly UI files."
 }

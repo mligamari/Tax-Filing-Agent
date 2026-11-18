@@ -52,6 +52,7 @@ class Employer:
     employment_code: str = "R"      # R = regular (Form 941)
     terminating_business: bool = False
     state_ids: dict[str, str] = field(default_factory=dict)  # state postal code -> state employer account
+    ui_accounts: dict[str, str] = field(default_factory=dict)  # state postal code -> unemployment-insurance account
 
 
 @dataclass
@@ -105,3 +106,48 @@ class WageReport:
     submitter: Submitter | None
     employer: Employer
     employees: list[W2]
+
+
+@dataclass
+class QuarterlyWages:
+    """One employee's unemployment-insurance (UI) wages for one calendar quarter.
+
+    Quarterly UI wage reports (EFW2-style or ICESA) ask for gross wages paid in the
+    quarter, the part above the state's taxable wage base ("excess"), the taxable rest,
+    and whether the person was on the payroll on the 12th of each month."""
+    ssn: str                    # 9 digits, no hyphens
+    first_name: str
+    middle_name: str
+    last_name: str
+    suffix: str = ""
+    address: Address = field(default_factory=Address)   # filled from the W-2 sheet by SSN
+    gross_wages: Decimal = Decimal(0)
+    excess_wages: Decimal = Decimal(0)
+    taxable_wages: Decimal = Decimal(0)
+    employed_12th: tuple[bool, bool, bool] = (False, False, False)
+    control_number: str = ""
+    source_row: int | None = None
+
+    @property
+    def display_name(self) -> str:
+        return f"{self.first_name} {self.last_name}".strip()
+
+    def where(self) -> str:
+        row = f"row {self.source_row}, " if self.source_row else ""
+        return f"{row}control {self.control_number} ({self.display_name})"
+
+
+@dataclass
+class QuarterlyReport:
+    """One employer's UI wage report for one state and quarter."""
+    tax_year: int
+    quarter: int                # 1-4
+    state: str                  # postal code of the UI agency's state
+    employer: Employer          # employer.ui_accounts[state] holds the UI account number
+    employees: list[QuarterlyWages]
+    submitter: Submitter | None = None
+
+    @property
+    def employed_12th_counts(self) -> tuple[int, int, int]:
+        """People on the payroll on the 12th of month 1, 2 and 3 of the quarter."""
+        return tuple(sum(e.employed_12th[m] for e in self.employees) for m in range(3))  # type: ignore[return-value]

@@ -7,16 +7,37 @@
       "agency": "Virginia Department of Taxation (Virginia Tax)",
       "portal": "Web Upload, W-2 text file",
       "format": "EFW2",
-      "layouts": {"2025": "efw2_ty2025", "2026": "efw2_ty2026"},
+      "layouts": {
+        "2025": "efw2_ty2025",
+        "2026": "efw2_ty2026"
+      },
       "default_year": 2025,
-      "employee_records": ["RW", "RO", "RS"],
+      "employee_records": [
+        "RW",
+        "RO",
+        "RS"
+      ],
       "state_record": "RS",
       "only_employees_with_state_wages": true,
       "one_state_record_per_employee": true,
-      "state_record_values": {"state_code": "51", "state_code_2": "51"},
+      "state_record_values": {
+        "state_code": "51",
+        "state_code_2": "51"
+      },
       "required_fields": {
-        "RE": ["tax_year", "employer_ein", "employer_name"],
-        "RS": ["state_code", "ssn", "first_name", "last_name", "delivery_address", "state_code_2"]
+        "RE": [
+          "tax_year",
+          "employer_ein",
+          "employer_name"
+        ],
+        "RS": [
+          "state_code",
+          "ssn",
+          "first_name",
+          "last_name",
+          "delivery_address",
+          "state_code_2"
+        ]
       },
       "account_number": {
         "field": "state_employer_account",
@@ -37,6 +58,55 @@
       "source": {
         "title": "Virginia Tax, Web Upload Guide for W-2s, W-2Cs, and 1099s (Revised 1/2025), Appendix A",
         "url": "https://tax.am.virginia.gov/sites/default/files/inline-files/web-upload-w2-1099-guide.pdf"
+      }
+    },
+    "ui_quarterly": {
+      "agency": "Virginia Employment Commission (VEC)",
+      "portal": "VEC Web Upload (hosted by Virginia Tax), SUI tax report",
+      "format": "EFW2 (SSA generic RS record)",
+      "provisional": true,
+      "provisional_note": "Built on SSA's generic RS (State) record, not on VEC's own file specification, which is available only inside the VEC employer portal and has been requested. Record set, file name, account number format and the employed-on-the-12th counts may change once VEC's specification is in hand. Do not upload this file to VEC until then.",
+      "layouts": {
+        "2025": "efw2_ty2025",
+        "2026": "efw2_ty2026"
+      },
+      "default_year": 2025,
+      "records": [
+        "RA",
+        "RE",
+        "RS",
+        "RF"
+      ],
+      "state_record_values": {
+        "state_code": "51"
+      },
+      "required_fields": {
+        "RE": [
+          "tax_year",
+          "employer_ein",
+          "employer_name"
+        ],
+        "RS": [
+          "state_code",
+          "ssn",
+          "first_name",
+          "last_name",
+          "reporting_period",
+          "state_employer_account"
+        ]
+      },
+      "final_line_ending": false,
+      "default_file_name": "VEC UI {year} Q{quarter}.txt",
+      "rules": [
+        "SSA Pub 42-007, RS record: positions 195-242 and 248-267 'apply to unemployment reporting'. This file uses Reporting Period (197-202, last month and year of the quarter, e.g. 032025), State Quarterly UI Total Wages (203-213), State Quarterly UI Total Taxable Wages (214-224) and State Employer Account Number (248-267, the VEC account).",
+        "PROVISIONAL: one RS record per employee with wages in the quarter, after the RA and RE records, then RF. SSA's RW and RT records hold yearly federal W-2 amounts and are left out; RF therefore counts 0 RW records. VEC's specification may ask for a different record set.",
+        "PROVISIONAL: income tax fields (274-297), weeks worked (225-226) and hire/separation dates (227-242) are left blank, and the state code at 274-275 is not written, because SSA marks them for income tax reporting or as defined by the state.",
+        "PROVISIONAL: SSA's RS record has no field for the number of employees on the payroll on the 12th of each month; VEC asks for these counts on its quarterly report. The counts are worked out and printed, but not written to the file, until VEC's specification shows where they go (likely the state-defined RV record).",
+        "Each record except the last is followed by one CR/LF, as in Virginia's W-2 file (PROVISIONAL for VEC)."
+      ],
+      "source": {
+        "title": "SSA Publication 42-007, EFW2, RS (State) record (specs/ssa/efw2_ty2025.txt, efw2_ty2026.txt). VEC Web Upload Guide (July 2026) states VEC accepts EFW2/SSA and ICESA for SUI tax reports; its record layout is not yet in this repository.",
+        "url": "https://www.tax.virginia.gov/sites/default/files/inline-files/vec-web-upload-guide.pdf"
       }
     }
   }

@@ -468,7 +468,8 @@ def format_report(result: CheckResult, title: str = "Check") -> str:
                    f"{result.fields_compared} fields")
     labels = [("total_box1_wages", "Box 1 wages"), ("total_box2_fed_tax", "Box 2 federal tax"),
               ("total_box3_ss_wages", "Box 3 SS wages"), ("total_box5_medicare_wages", "Box 5 Medicare wages"),
-              ("state_wages", "State wages (RS)"), ("state_tax", "State tax (RS)")]
+              ("state_wages", "State wages (RS)"), ("state_tax", "State tax (RS)"),
+              ("ui_total_wages", "UI total wages (RS)"), ("ui_taxable_wages", "UI taxable wages (RS)")]
     for key, label in labels:
         if key in result.totals:
             out.append(f"  {label:<22}{result.totals[key]:>16,.2f}")

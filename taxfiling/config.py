@@ -49,4 +49,6 @@ def apply_employer_settings(employer: Employer, settings: dict, submitter: Submi
     employer.kind_of_employer = settings.get("kind_of_employer", employer.kind_of_employer)
     employer.employment_code = settings.get("employment_code", employer.employment_code)
     employer.terminating_business = bool(settings.get("terminating_business", False))
+    for state, account in settings.get("ui_accounts", {}).items():
+        employer.ui_accounts[state.upper()] = str(account)
     return employer
