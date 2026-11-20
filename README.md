@@ -28,8 +28,11 @@ $ python -m taxfiling w2 --state VA \
       --submitter examples/va_2025/submitter.json
 
 Read 50 employees for Blue Ridge Precision Components Inc from examples/va_2025/w2_2025_va_synthetic.xlsx
-Input notes: 0 error(s), 2 warning(s)
+Input notes: 0 error(s), 5 warning(s)
+  WARNING: row 24, control 00023 (Thomas St. Clair): RW Employee Last Name: punctuation removed, 'St. Clair' written as 'ST CLAIR'
+  WARNING: row 33, control 00032 (William O'Brien): RW Employee Last Name: punctuation removed, 'O'Brien' written as 'OBRIEN'
   WARNING: row 39, control 00038 (Jamal Sullivan): RW Delivery Address: '5361 Jefferson Davis Hwy' is longer than 22 characters; written as '5361 JEFFERSON DAVIS H'
+  WARNING: row 47, control 00046 (Megan Batista-Cruz): RW Employee Last Name: punctuation removed, 'Batista-Cruz' written as 'BATISTACRUZ'
   WARNING: row 50, control 00049 (Marcus Smith): RW Delivery Address: '7038 Jefferson Davis Hwy' is longer than 22 characters; written as '7038 JEFFERSON DAVIS H'
 Wrote W2 REPORT 2025.txt (54,482 bytes) for Virginia (Virginia Department of Taxation (Virginia Tax), Web Upload, W-2 text file)
 Round-trip check: PASSED
@@ -46,7 +49,9 @@ Round-trip check: PASSED
     ...
 ```
 
-The checker finds the two shortened streets on its own, by comparing the file with the
+Punctuation is removed from employee names (O'Brien becomes OBRIEN), as state wage
+files expect; a state profile can keep it with `"keep_name_punctuation": true`. The
+checker finds the two shortened streets on its own, by comparing the file with the
 spreadsheet; it does not take the writer's word for anything.
 
 The written file is committed at
@@ -438,8 +443,7 @@ still the employer's decision.
 * **The mapper** reads one row per employee with one column per box. A sheet with one row
   per Box 12 entry, or names in a single "Last, First" column, needs reshaping first.
 * **The VEC quarterly file** matches VEC's sample file, but the meaning of VEC's RT totals
-  fields is inferred (see above). VEC's templates ask for letters only in names, so names
-  such as O'Brien or Batista-Cruz get a warning; the program does not change them.
+  fields is inferred (see above).
 * Next: a VEC test upload, then ICESA (VEC's ICESA sample is in `tests/data/`), more
   states, and a simple local app.
 

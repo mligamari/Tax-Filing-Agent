@@ -174,6 +174,23 @@ def _address_matches(delivery: str, location: str, src_delivery: str, src_locati
     return None
 
 
+def expected_name(text: str, profile: dict) -> str:
+    """What a name part from the source should look like in the file: letters and single spaces
+    only, unless the state profile keeps punctuation. Worked out here, not taken from the writer."""
+    if profile.get("keep_name_punctuation"):
+        return text or ""
+    return " ".join("".join(c for c in (text or "") if c.isascii() and (c.isalpha() or c == " ")).split())
+
+
+def check_name_characters(rec: dict, rt: str, where: str, issues: Issues, profile: dict) -> None:
+    """Names in the file hold letters and spaces only, unless the profile keeps punctuation."""
+    if profile.get("keep_name_punctuation"):
+        return
+    for key in ("first_name", "middle_name", "last_name", "suffix"):
+        if any(not (c.isalpha() or c == " ") for c in rec.get(key) or ""):
+            issues.error(where, f"{rt} {key} '{rec[key]}' has punctuation; names must be letters only")
+
+
 def _compare_text(label: str, written: str, source: str, where: str, issues: Issues,
                   width: int | None = None) -> None:
     """Exact match, or (when a width is given) the source cut to that width, which is a warning."""
@@ -210,8 +227,9 @@ def _compare_employee(rw: dict, ro: dict | None, rs_list: list[dict], w2: W2, la
         return
     result.employees_compared += 1
     for key in ("first_name", "middle_name", "last_name", "suffix"):
-        _compare_text(f"RW {key}", rw[key], getattr(w2, key), where, issues)
+        _compare_text(f"RW {key}", rw[key], expected_name(getattr(w2, key), profile), where, issues)
         result.fields_compared += 1
+    check_name_characters(rw, "RW", where, issues, profile)
     _compare_address(rw, w2, "RW", layout, where, issues)
     for f in layout["RW"].fields:
         if f.type != "M" or f.key.startswith("box11_"):
@@ -278,7 +296,8 @@ def _compare_employee(rw: dict, ro: dict | None, rs_list: list[dict], w2: W2, la
         return
     rs, st = mine[0], lines[0]
     for key in ("first_name", "middle_name", "last_name", "suffix"):
-        _compare_text(f"RS {key}", rs[key], getattr(w2, key), where, issues)
+        _compare_text(f"RS {key}", rs[key], expected_name(getattr(w2, key), profile), where, issues)
+    check_name_characters(rs, "RS", where, issues, profile)
     _compare_address(rs, w2, "RS", layout, where, issues)
     for label, got, expected in (("state wages (Box 16)", rs["state_wages"], st.wages),
                                  ("state tax (Box 17)", rs["state_tax"], st.tax)):

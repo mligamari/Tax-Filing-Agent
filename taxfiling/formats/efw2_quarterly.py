@@ -46,10 +46,10 @@ class QuarterlyEfw2Builder(Efw2Builder):
     def _person_q(self, w: QuarterlyWages, where: str) -> dict[str, Any]:
         values = {
             "ssn": w.ssn,
-            "first_name": self._fit(w.first_name, "RS", "first_name", where),
-            "middle_name": self._fit(w.middle_name, "RS", "middle_name", where),
-            "last_name": self._fit(w.last_name, "RS", "last_name", where),
-            "suffix": self._fit(w.suffix, "RS", "suffix", where),
+            "first_name": self._name(w.first_name, "RS", "first_name", where),
+            "middle_name": self._name(w.middle_name, "RS", "middle_name", where),
+            "last_name": self._name(w.last_name, "RS", "last_name", where),
+            "suffix": self._name(w.suffix, "RS", "suffix", where),
         }
         values.update(self._address(w.address, "RS", "", where))
         return values
@@ -65,12 +65,6 @@ class QuarterlyEfw2Builder(Efw2Builder):
         })
         if self.profile.get("employee_taxable_wages", True):
             values["ui_taxable_wages"] = w.taxable_wages
-        rule = self.profile.get("name_rule")
-        if rule:
-            for label, name in (("first name", w.first_name), ("last name", w.last_name)):
-                if not re.fullmatch(rule["pattern"], name):
-                    self.issues.warning(where, f"{label} '{name}' has characters other than letters; "
-                                               f"{rule['description']}")
         self._add("RS", values, where)
 
     def rt_vec(self, report: QuarterlyReport) -> None:

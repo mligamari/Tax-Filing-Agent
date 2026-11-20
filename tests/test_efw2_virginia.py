@@ -194,3 +194,21 @@ def test_name_too_long_is_an_error_not_a_silent_cut(va_report, layout, va_profil
     text, issues = build_efw2(va_report, layout, va_profile)
     assert text is None
     assert any("Last Name" in e.message for e in issues.errors)
+
+
+def test_punctuation_is_removed_from_names(va_report, layout, va_profile):
+    text, issues = build_efw2(va_report, layout, va_profile)
+    assert "O'BRIEN" not in text and "BATISTA-CRUZ" not in text and "ST. CLAIR" not in text
+    assert "OBRIEN " in text and "BATISTACRUZ" in text and "ST CLAIR" in text
+    assert any("punctuation removed" in w.message for w in issues.warnings)
+
+
+def test_a_profile_can_keep_name_punctuation(va_report, layout, va_profile):
+    text, _ = build_efw2(va_report, layout, {**va_profile, "keep_name_punctuation": True})
+    assert "O'BRIEN" in text
+
+
+def test_a_name_with_no_letters_stops_the_file(va_report, layout, va_profile):
+    va_report.employees[0].last_name = "--"
+    text, issues = build_efw2(va_report, layout, va_profile)
+    assert text is None and any("has no letters" in i.message for i in issues.errors)

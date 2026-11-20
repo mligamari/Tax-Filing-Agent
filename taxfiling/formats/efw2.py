@@ -72,6 +72,23 @@ class Efw2Builder:
                                  f"{width} characters")
         return value[:width]
 
+    def _name(self, value: str, record: str, key: str, where: str) -> str:
+        """A person's name part with punctuation removed (O'Brien -> OBRIEN, St. Clair -> ST CLAIR,
+        Batista-Cruz -> BATISTACRUZ), as state wage files expect; a profile can keep it with
+        "keep_name_punctuation". Then checked against the field width."""
+        value = (value or "").strip()
+        if not self.profile.get("keep_name_punctuation"):
+            cleaned = re.sub(r" +", " ", re.sub(r"[^A-Za-z ]", "", value)).strip()
+            if cleaned != value and cleaned.upper() != value.upper():
+                label = self.layout[record][key].name
+                if not cleaned:
+                    self.issues.error(where, f"{record} {label}: '{value}' has no letters")
+                else:
+                    self.issues.warning(where, f"{record} {label}: punctuation removed, '{value}' written as "
+                                               f"'{cleaned.upper()}'")
+            value = cleaned
+        return self._fit(value, record, key, where)
+
     def _address(self, addr: Address, record: str, prefix: str, where: str) -> dict[str, str]:
         """Street goes in the delivery address. A unit (Apt, Suite...) that does not fit moves to
         the location address, which EFW2 defines for suite and room numbers."""
@@ -135,10 +152,10 @@ class Efw2Builder:
             return dict(self._people[id(w2)])
         values = {
             "ssn": w2.ssn,
-            "first_name": self._fit(w2.first_name, record, "first_name", where),
-            "middle_name": self._fit(w2.middle_name, record, "middle_name", where),
-            "last_name": self._fit(w2.last_name, record, "last_name", where),
-            "suffix": self._fit(w2.suffix, record, "suffix", where),
+            "first_name": self._name(w2.first_name, record, "first_name", where),
+            "middle_name": self._name(w2.middle_name, record, "middle_name", where),
+            "last_name": self._name(w2.last_name, record, "last_name", where),
+            "suffix": self._name(w2.suffix, record, "suffix", where),
         }
         values.update(self._address(w2.address, record, "", where))
         self._people[id(w2)] = values

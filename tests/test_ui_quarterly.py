@@ -103,9 +103,18 @@ def test_account_must_be_ten_digits():
     assert any("10 digits" in i.message for i in issues.errors)
 
 
-def test_names_with_punctuation_are_flagged():
-    _, issues, *_ = build(2025, 1)
-    assert any("O'Brien" in w.message and "letters" in w.message for w in issues.warnings)
+def test_punctuation_is_removed_from_names():
+    text, issues, report, *_ = build(2025, 1)
+    assert any("'O'Brien' written as 'OBRIEN'" in w.message for w in issues.warnings)
+    assert "OBRIEN " in text and "O'BRIEN" not in text and "BATISTACRUZ" in text and "ST CLAIR" in text
+
+
+def test_check_catches_punctuation_left_in_a_name():
+    def edit(lines):
+        i = next(n for n, line in enumerate(lines) if line[48:68].rstrip() == "OBRIEN")
+        lines[i] = _set(lines[i], 49, "O'BRIEN")
+    messages = _messages(_damaged(edit))
+    assert "has punctuation" in messages and "does not match the source" in messages
 
 
 def test_provisional_status_is_always_reported():
