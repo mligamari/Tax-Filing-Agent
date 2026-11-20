@@ -26,13 +26,12 @@ from ..config import apply_employer_settings, load_submitter
 from ..formats.efw2 import build_efw2
 from ..formats.efw2_quarterly import build_efw2_quarterly
 from ..issues import Issues
-from ..layout import load_layout
 from ..mapper import AuditLog, BoundaryViolation, check_proposal, prepare
 from ..mapper.fields import FIELDS
 from ..model import WageReport
 from ..readers.excel import read_w2_workbook
 from ..readers.quarterly import load_quarterly_report
-from ..states import report_profile
+from ..states import profile_layout, report_profile
 from ..validate import validate_report
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -261,7 +260,8 @@ class Demo:
                      "warnings": [str(i) for i in result.issues.warnings]}
         return {
             "output": kind, "title": OUTPUTS[kind]["title"], "agency": profile.get("agency"),
-            "provisional": bool(profile.get("provisional")), "year": profile.get("tax_year"),
+            "provisional": bool(profile.get("provisional")), "provisional_note": profile.get("provisional_note", ""),
+            "year": profile.get("tax_year"),
             "employees": employees, "file_name": file_name,
             "bytes": len(data) if data is not None else 0,
             "input_errors": [str(i) for i in issues.errors],
@@ -273,7 +273,7 @@ class Demo:
 
     def _build_w2(self, s: Session, mapping: dict, year: int, submitter_file: Path) -> dict:
         profile = report_profile("VA", "w2", year)
-        layout = load_layout(profile["layout"])
+        layout = profile_layout(profile)
         employer, employees, issues = read_w2_workbook(s.workbook, mapping)
         submitter, settings = load_submitter(submitter_file)
         apply_employer_settings(employer, settings, submitter)
@@ -293,7 +293,7 @@ class Demo:
 
     def _build_ui(self, s: Session, mapping: dict, year: int, quarter: int, submitter_file: Path) -> dict:
         profile = report_profile("VA", "ui_quarterly", year)
-        layout = load_layout(profile["layout"])
+        layout = profile_layout(profile)
         name = profile["default_file_name"].format(year=year, quarter=quarter)
         try:
             report, issues = load_quarterly_report(s.workbook, "VA", year, quarter, None, mapping)

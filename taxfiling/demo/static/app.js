@@ -66,7 +66,7 @@ async function init() {
       el("input", { type: "radio", name: "output", value: o.key, onchange: outputChanged }),
       el("span", {}, el("strong", {}, o.title, o.provisional ? el("span", { class: "tag" }, "Provisional") : null),
         el("small", {}, o.agency + (o.key === "ui"
-          ? ". Built on SSA's generic format while Virginia's own spec is requested. Needs a Quarterly Wages sheet."
+          ? ". Matches VEC's own sample file; a few totals fields are inferred, so it is marked provisional. Needs a Quarterly Wages sheet."
           : ". The yearly file of every employee's W-2, in SSA's EFW2 format with Virginia's state record.")))));
   }
   for (const y of state.options.years) $("year").append(el("option", { value: y }, y));
@@ -343,8 +343,7 @@ function renderResult(r) {
   box.append(verdict);
 
   if (r.provisional) {
-    box.append(el("div", { class: "callout warn" }, "Provisional format: built on SSA's generic state record, not the " +
-      "Virginia Employment Commission's own specification, which has been requested. Do not upload this file."));
+    box.append(el("div", { class: "callout warn" }, "Provisional: " + (r.provisional_note || "") + " Nothing in this demo is uploaded."));
   }
   if (r.check) {
     const stats = el("div", { class: "stats" },
@@ -366,7 +365,7 @@ function renderResult(r) {
       el("span", { class: "status" }, `${r.bytes.toLocaleString()} bytes, ${r.year} tax year. The file holds full SSNs, as the state requires.`)));
     box.append(el("h3", {}, "A look inside the file (SSNs masked here)"),
       el("p", { class: "muted" }, r.output === "ui"
-        ? "Each line is one fixed-width record. RA is the submitter, RE the employer, each RS one employee's wages for the quarter, RF the end of the file."
+        ? "Each line is one fixed-width record. RA is the submitter, RE the employer, each RS one employee's wages for the quarter, RT the totals and RF the end of the file."
         : "Each line is one fixed-width record. RA is the submitter, RE the employer, RW and RS one employee's federal and state wages, RT and RF the totals."),
       el("pre", {}, r.preview.map((p) => p.text).join("\n")));
   }

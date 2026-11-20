@@ -71,17 +71,19 @@ def split_records(data: bytes, layout: Layout, issues: Issues) -> list[str]:
         issues.error("file", f"byte {exc.start} is not ASCII (value {data[exc.start]})")
         text = data.decode("ascii", errors="replace")
     n = layout.record_length
-    if "\r\n" in text or len(text) <= n:
-        if text.endswith("\r\n"):
-            text = text[:-2]
-        records = text.split("\r\n")
+    sep = layout.line_ending
+    name = {"\r\n": "CR/LF", "\n": "LF"}.get(sep, repr(sep))
+    if sep in text or len(text) <= n:
+        if text.endswith(sep):
+            text = text[:-len(sep)]
+        records = text.split(sep)
     else:
         if len(text) % n:
-            issues.error("file", f"file has no CR/LF delimiters and its length {len(text)} is not a multiple of {n}")
+            issues.error("file", f"file has no {name} delimiters and its length {len(text)} is not a multiple of {n}")
         records = [text[i:i + n] for i in range(0, len(text), n)]
     for i, rec in enumerate(records, 1):
         if "\r" in rec or "\n" in rec:
-            issues.error(f"line {i}", "stray CR or LF inside a record (records must be separated by CR/LF)")
+            issues.error(f"line {i}", f"stray CR or LF inside a record (records must be separated by {name})")
         if rec == "":
             issues.error(f"line {i}", "empty line")
         elif len(rec) != n:
@@ -469,7 +471,8 @@ def format_report(result: CheckResult, title: str = "Check") -> str:
     labels = [("total_box1_wages", "Box 1 wages"), ("total_box2_fed_tax", "Box 2 federal tax"),
               ("total_box3_ss_wages", "Box 3 SS wages"), ("total_box5_medicare_wages", "Box 5 Medicare wages"),
               ("state_wages", "State wages (RS)"), ("state_tax", "State tax (RS)"),
-              ("ui_total_wages", "UI total wages (RS)"), ("ui_taxable_wages", "UI taxable wages (RS)")]
+              ("ui_total_wages", "UI total wages"), ("ui_excess_wages", "UI excess wages"),
+              ("ui_taxable_wages", "UI taxable wages")]
     for key, label in labels:
         if key in result.totals:
             out.append(f"  {label:<22}{result.totals[key]:>16,.2f}")

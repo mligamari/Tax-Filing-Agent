@@ -63,9 +63,9 @@
     "ui_quarterly": {
       "agency": "Virginia Employment Commission (VEC)",
       "portal": "VEC Web Upload (hosted by Virginia Tax), SUI tax report",
-      "format": "EFW2 (SSA generic RS record)",
+      "format": "EFW2 (VEC form type 'FC-20 EFW2/MMREF')",
       "provisional": true,
-      "provisional_note": "Built on SSA's generic RS (State) record, not on VEC's own file specification, which is available only inside the VEC employer portal and has been requested. Record set, file name, account number format and the employed-on-the-12th counts may change once VEC's specification is in hand. Do not upload this file to VEC until then.",
+      "provisional_note": "Matches VEC's own EFW2 sample file record for record, but VEC's sample is a template of zeros and placeholders with no field definitions. The VEC totals record (RT) is VEC-specific; the meaning of its fields is inferred from Form FC-20, and one two-digit field (positions 11-12) is unidentified. Upload a test file through VEC Web Upload and check its Line Counts and Validation Totals before filing.",
       "layouts": {
         "2025": "efw2_ty2025",
         "2026": "efw2_ty2026"
@@ -75,10 +75,13 @@
         "RA",
         "RE",
         "RS",
+        "RT",
         "RF"
       ],
       "state_record_values": {
-        "state_code": "51"
+        "state_code": "51",
+        "taxing_entity_code": "B",
+        "tax_type_code": "B"
       },
       "required_fields": {
         "RE": [
@@ -95,19 +98,233 @@
           "state_employer_account"
         ]
       },
-      "final_line_ending": false,
-      "default_file_name": "VEC UI {year} Q{quarter}.txt",
+      "final_line_ending": true,
       "rules": [
-        "SSA Pub 42-007, RS record: positions 195-242 and 248-267 'apply to unemployment reporting'. This file uses Reporting Period (197-202, last month and year of the quarter, e.g. 032025), State Quarterly UI Total Wages (203-213), State Quarterly UI Total Taxable Wages (214-224) and State Employer Account Number (248-267, the VEC account).",
-        "PROVISIONAL: one RS record per employee with wages in the quarter, after the RA and RE records, then RF. SSA's RW and RT records hold yearly federal W-2 amounts and are left out; RF therefore counts 0 RW records. VEC's specification may ask for a different record set.",
-        "PROVISIONAL: income tax fields (274-297), weeks worked (225-226) and hire/separation dates (227-242) are left blank, and the state code at 274-275 is not written, because SSA marks them for income tax reporting or as defined by the state.",
-        "PROVISIONAL: SSA's RS record has no field for the number of employees on the payroll on the 12th of each month; VEC asks for these counts on its quarterly report. The counts are worked out and printed, but not written to the file, until VEC's specification shows where they go (likely the state-defined RV record).",
-        "Each record except the last is followed by one CR/LF, as in Virginia's W-2 file (PROVISIONAL for VEC)."
+        "Record set from VEC's EFW2 sample: RA, RE, one RS per employee, RT, RF. No RW records, so RF counts 0 RW records.",
+        "RS (SSA layout): state code 51 at 3-4; SSN, first name (15), middle, last name (20); reporting period 197-202 (last month and year of the quarter, e.g. 032025); total quarterly UI wages 203-213; VEC account number 248-267 as 20 digits, zero-filled (VEC's sample shows 20 zeros; VEC's portal help asks for a 10-digit account number such as 0001234567). VEC's sample has 'B' at 5 and 308 and leaves every other numeric field blank, including per-employee taxable wages (214-224) and all income tax fields; this file does the same.",
+        "RT is VEC's own record, not SSA's: from VEC's sample, a 7-digit count at 3-9, an unidentified 2-digit field at 11-12, three 14-digit amounts at 14-27, 29-42 and 44-57 and three 7-digit counts at 59-65, 67-73 and 75-81, each separated by one blank. Form FC-20 asks for exactly three wage totals (total wages, wages above the $8,000 base, wages subject to tax) and three monthly employee counts (0 to 9,999,999, i.e. 7 digits), so this file puts them there in FC-20's order. INFERRED: confirm with VEC.",
+        "Records are separated by LF (not CR/LF), with an LF after the last record, as in VEC's EFW2 sample.",
+        "VEC's Excel template: SSN 9 digits, not starting 000, 666 or 900-999, no all-zero group; first name up to 15 letters, last name up to 20 letters; amounts are positive.",
+        "The RA and RE records follow SSA's layout; VEC's sample fills the company, submitter and employer names and addresses, tax year and EINs."
       ],
       "source": {
-        "title": "SSA Publication 42-007, EFW2, RS (State) record (specs/ssa/efw2_ty2025.txt, efw2_ty2026.txt). VEC Web Upload Guide (July 2026) states VEC accepts EFW2/SSA and ICESA for SUI tax reports; its record layout is not yet in this repository.",
+        "title": "VEC Web Upload Guide (July 2026); VEC sample files 'sample_EFW2_Quarterly_Wage_Report_VEC.txt' and 'sample_Excel_Quarterly_Wage_Report_VEC.xls' (received by email from VEC, 2026-11-19); SSA Publication 42-007 RS record",
         "url": "https://www.tax.virginia.gov/sites/default/files/inline-files/vec-web-upload-guide.pdf"
-      }
+      },
+      "layout_overrides": {
+        "line_ending": "\n",
+        "blank_when_empty": [
+          "RS"
+        ],
+        "records": {
+          "RT": {
+            "name": "VEC Total (Form FC-20 totals)",
+            "fields": [
+              {
+                "key": "record_id",
+                "name": "Record Identifier",
+                "start": 1,
+                "end": 2,
+                "type": "const",
+                "sources": [
+                  "vec-sample-efw2"
+                ],
+                "value": "RT"
+              },
+              {
+                "key": "employee_count",
+                "name": "Number of RS Records",
+                "start": 3,
+                "end": 9,
+                "type": "N",
+                "sources": [
+                  "vec-sample-efw2"
+                ],
+                "count_of": "RS",
+                "notes": "SSA's RT also starts with a 7-digit record count at 3-9"
+              },
+              {
+                "key": "blank_10",
+                "name": "Blank",
+                "start": 10,
+                "end": 10,
+                "type": "blank",
+                "sources": [
+                  "vec-sample-efw2"
+                ]
+              },
+              {
+                "key": "unidentified_11",
+                "name": "Unidentified two-digit field",
+                "start": 11,
+                "end": 12,
+                "type": "N",
+                "sources": [
+                  "vec-sample-efw2"
+                ],
+                "verified": false,
+                "notes": "Zeros in VEC's sample; its meaning is not stated anywhere we have. Written as 00."
+              },
+              {
+                "key": "blank_13",
+                "name": "Blank",
+                "start": 13,
+                "end": 13,
+                "type": "blank",
+                "sources": [
+                  "vec-sample-efw2"
+                ]
+              },
+              {
+                "key": "total_ui_wages",
+                "name": "Total Quarterly Wages",
+                "start": 14,
+                "end": 27,
+                "type": "M",
+                "sources": [
+                  "vec-sample-efw2"
+                ],
+                "sum_of": "ui_total_wages",
+                "verified": false,
+                "notes": "FC-20 line 'Total Wages'; position from VEC's sample, meaning inferred"
+              },
+              {
+                "key": "blank_28",
+                "name": "Blank",
+                "start": 28,
+                "end": 28,
+                "type": "blank",
+                "sources": [
+                  "vec-sample-efw2"
+                ]
+              },
+              {
+                "key": "total_excess_wages",
+                "name": "Total Wages in Excess of the Taxable Wage Base",
+                "start": 29,
+                "end": 42,
+                "type": "M",
+                "sources": [
+                  "vec-sample-efw2"
+                ],
+                "verified": false,
+                "notes": "FC-20 'Total Wages in excess of $8000'; inferred"
+              },
+              {
+                "key": "blank_43",
+                "name": "Blank",
+                "start": 43,
+                "end": 43,
+                "type": "blank",
+                "sources": [
+                  "vec-sample-efw2"
+                ]
+              },
+              {
+                "key": "total_taxable_wages",
+                "name": "Total Wages Subject to Tax",
+                "start": 44,
+                "end": 57,
+                "type": "M",
+                "sources": [
+                  "vec-sample-efw2"
+                ],
+                "verified": false,
+                "notes": "FC-20 'Wages Subject to Tax'; inferred"
+              },
+              {
+                "key": "blank_58",
+                "name": "Blank",
+                "start": 58,
+                "end": 58,
+                "type": "blank",
+                "sources": [
+                  "vec-sample-efw2"
+                ]
+              },
+              {
+                "key": "month1_employees",
+                "name": "Employees on the Payroll on the 12th, Month 1",
+                "start": 59,
+                "end": 65,
+                "type": "N",
+                "sources": [
+                  "vec-sample-efw2"
+                ],
+                "verified": false,
+                "notes": "FC-20 'Total Month 1 Employees' (0 to 9,999,999, i.e. 7 digits); inferred"
+              },
+              {
+                "key": "blank_66",
+                "name": "Blank",
+                "start": 66,
+                "end": 66,
+                "type": "blank",
+                "sources": [
+                  "vec-sample-efw2"
+                ]
+              },
+              {
+                "key": "month2_employees",
+                "name": "Employees on the Payroll on the 12th, Month 2",
+                "start": 67,
+                "end": 73,
+                "type": "N",
+                "sources": [
+                  "vec-sample-efw2"
+                ],
+                "verified": false,
+                "notes": "inferred"
+              },
+              {
+                "key": "blank_74",
+                "name": "Blank",
+                "start": 74,
+                "end": 74,
+                "type": "blank",
+                "sources": [
+                  "vec-sample-efw2"
+                ]
+              },
+              {
+                "key": "month3_employees",
+                "name": "Employees on the Payroll on the 12th, Month 3",
+                "start": 75,
+                "end": 81,
+                "type": "N",
+                "sources": [
+                  "vec-sample-efw2"
+                ],
+                "verified": false,
+                "notes": "inferred"
+              },
+              {
+                "key": "blank_82",
+                "name": "Blank",
+                "start": 82,
+                "end": 512,
+                "type": "blank",
+                "sources": [
+                  "vec-sample-efw2"
+                ]
+              }
+            ]
+          }
+        }
+      },
+      "account_number": {
+        "field": "state_employer_account",
+        "pattern": "^[0-9]{10}$",
+        "description": "VEC account number: exactly 10 digits, with its leading zeros (e.g. 0001234567)",
+        "write": "zero_fill",
+        "digits": 10
+      },
+      "name_rule": {
+        "pattern": "^[A-Za-z ]*$",
+        "description": "VEC's Excel template asks for letters only in first and last names"
+      },
+      "default_file_name": "VEC UI {year} Q{quarter}.txt",
+      "employee_taxable_wages": false
     }
   }
 }

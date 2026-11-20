@@ -122,11 +122,10 @@ file has six RO records. The new Box 14b tipped-occupation codes go in RW from 2
 2025 file has no place for them, so they are reported instead.
 
 **Virginia quarterly unemployment-insurance (UI) wage file** (Virginia Employment
-Commission, VEC), **provisional**. Employers report each employee's wages to VEC every
-quarter; VEC's unemployment tax is based on them. VEC says it accepts files in SSA's EFW2
-format and in ICESA, but its own record layout is only available inside VEC's employer
-portal. Until it is in hand, this file follows SSA's generic definition of the RS (State)
-record, which SSA defines for quarterly UI reporting too:
+Commission, VEC). Employers report each employee's wages to VEC every quarter (Forms FC-20
+and FC-21); VEC's unemployment tax is based on them. VEC accepts EFW2, ICESA, Excel and
+delimited files through VEC Web Upload. This file follows VEC's own EFW2 sample file
+(form type "FC-20 EFW2/MMREF"), which VEC sent on request, record for record:
 
 ```text
 $ python -m taxfiling ui --state VA --quarter 2 \
@@ -135,27 +134,36 @@ $ python -m taxfiling ui --state VA --quarter 2 \
 
 Read 46 employees with 2025 Q2 wages for Blue Ridge Precision Components Inc from examples/va_2025/w2_2025_va_synthetic.xlsx
 ...
-Wrote VEC UI 2025 Q2.txt (25,184 bytes) for Virginia (Virginia Employment Commission (VEC))
-Employees on the payroll on the 12th of each month: 43, 45, 44 (not in the file; see the profile notes)
-PROVISIONAL: built on SSA's generic RS record, not the state's own specification. Do not upload until the state's specification has been checked.
+Wrote VEC UI 2025 Q2.txt (25,650 bytes) for Virginia (Virginia Employment Commission (VEC))
+Employees on the payroll on the 12th of each month: 43, 45, 44 (in the RT record)
 Round-trip check: PASSED
-  Records: RA 1, RE 1, RS 46, RF 1
-  Compared with source: 46 employees, 184 fields
-  UI total wages (RS)         843,341.27
-  UI taxable wages (RS)        26,946.75
+  Records: RA 1, RE 1, RS 46, RT 1, RF 1
+  Compared with source: 46 employees, 143 fields
+  UI total wages              843,341.27
+  UI excess wages             816,394.52
+  UI taxable wages             26,946.75
 ```
 
-Each RS record carries the quarter (positions 197-202, e.g. `062025`), the employee's total
-and taxable UI wages (203-213, 214-224) and the employer's VEC account number (248-267).
+* **RS**, one per employee (SSA's layout): the quarter (positions 197-202, e.g. `062025`),
+  the employee's total wages for the quarter (203-213) and the 10-digit VEC account number,
+  zero-filled to 20 digits (248-267). Like VEC's sample, it leaves every other amount blank.
+* **RT** is VEC's own totals record, not SSA's: the number of employees, total wages,
+  wages above the $8,000 wage base, taxable wages, and the number of employees on the
+  payroll on the 12th of each month, the totals Form FC-20 asks for.
+* Records end with LF (not CR/LF), as in VEC's sample. There are no RW records, which hold
+  yearly W-2 amounts.
+
 Wages come from the workbook's Quarterly Wages sheet; the employer and each employee's
 address come from the W-2 sheet, matched by SSN. `check-ui` re-reads a file on its own and
-compares it with the workbook, the same way `check` does for W-2 files.
+compares it with the workbook, the same way `check` does for W-2 files, and a test checks
+that our file has numbers in exactly the positions where VEC's sample has them
+([`tests/data/`](tests/data/) holds VEC's samples).
 
-What is provisional, and listed in [`taxfiling/states/va.json`](taxfiling/states/va.json):
-the record set (RA, RE, one RS per employee, RF, with no RW or RT because those carry
-yearly federal W-2 amounts), the file name, the account number format, and where the
-"employed on the 12th" counts go (SSA's RS record has no field for them). When VEC's
-specification arrives, these change in that profile, not in the code.
+**Still to confirm with a test upload.** VEC's sample is a template of zeros with no field
+names. Where each RT total goes is inferred from the sample's field sizes and Form FC-20,
+and one two-digit RT field (positions 11-12, `00` in the sample) is unidentified; every run
+prints this. The details are in [`taxfiling/states/va.json`](taxfiling/states/va.json), so
+a correction is a profile change, not new code.
 
 ## Install and run
 
@@ -178,7 +186,7 @@ python -m pytest
 |---|---|
 | `w2` | Reads the workbook, validates it, builds the state file and runs the round-trip check on it. The file is saved only if there are no errors and the check passes. |
 | `check` | Checks any file against the layout and state rules. With `--input` it also compares every employee and amount with the source. |
-| `show` | Prints a file field by field with positions. SSNs are masked unless `--show-ssn` is given. |
+| `show` | Prints a file field by field with positions. SSNs are masked unless `--show-ssn` is given. Add `--state VA --report ui_quarterly` to read VEC's own RT record. |
 | `ui` | Writes a quarterly unemployment-insurance wage file for one quarter (`--quarter 1`-`4`) and runs its round-trip check. Virginia's is provisional (see above). |
 | `check-ui` | Checks a quarterly UI file; with `--input`, also compares every employee and amount with the workbook. |
 | `layout` | Lists a layout table, with the page of SSA's spec that defines each field. |
@@ -475,13 +483,14 @@ still the employer's decision.
   blank), and the state-defined RV record (Virginia defines none, so none is written).
 * **The mapper** reads one row per employee with one column per box. A sheet with one row
   per Box 12 entry, or names in a single "Last, First" column, needs reshaping first.
-* **The VEC quarterly file is provisional**: it follows SSA's generic RS record until
-  VEC's own specification is available. Hire and separation dates and weeks worked are
-  left blank.
+* **The VEC quarterly file** matches VEC's sample file, but the meaning of VEC's RT totals
+  fields is inferred (see above). VEC's templates ask for letters only in names, so names
+  such as O'Brien or Batista-Cruz get a warning; the program does not change them.
 * **The demo** uses the synthetic submitter settings (`examples/va_<year>/submitter.json`)
   for the RA record, and makes the quarterly file only from a workbook laid out like the
   tidy sample.
-* Next: confirm the VEC file against VEC's specification, then ICESA and more states.
+* Next: a VEC test upload, then ICESA (VEC's ICESA sample is in `tests/data/`) and more
+  states.
 
 Before filing for real, upload a test file through the state's portal and compare
 it with SSA's free AccuWage tool. This project is a portfolio piece, not tax advice.

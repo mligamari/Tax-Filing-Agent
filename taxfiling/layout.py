@@ -16,7 +16,7 @@ Field types:
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 from typing import Any
@@ -104,6 +104,16 @@ def available_layouts() -> list[str]:
     return sorted(p.stem for p in LAYOUT_DIR.glob("*.json"))
 
 
+def _field(f: dict) -> Field:
+    return Field(
+        key=f["key"], name=f["name"], start=f["start"], end=f["end"], type=f["type"],
+        required=f.get("required") == "Y", value=f.get("value"), case=f.get("case", "upper"),
+        empty=f.get("empty", "zero"), verified=f.get("verified", True), sum_of=f.get("sum_of"),
+        count_of=f.get("count_of"), sources=tuple(f.get("sources", ())), notes=f.get("notes", ""),
+        page=f.get("page"),
+    )
+
+
 def load_layout(name_or_path: str | Path) -> Layout:
     path = Path(name_or_path)
     if not path.suffix:
@@ -111,17 +121,7 @@ def load_layout(name_or_path: str | Path) -> Layout:
     data = json.loads(path.read_text())
     records = {}
     for rt, rec in data["records"].items():
-        fields = [
-            Field(
-                key=f["key"], name=f["name"], start=f["start"], end=f["end"], type=f["type"],
-                required=f.get("required") == "Y", value=f.get("value"), case=f.get("case", "upper"),
-                empty=f.get("empty", "zero"), verified=f.get("verified", True), sum_of=f.get("sum_of"),
-                count_of=f.get("count_of"), sources=tuple(f.get("sources", ())), notes=f.get("notes", ""),
-                page=f.get("page"),
-            )
-            for f in rec["fields"]
-        ]
-        records[rt] = RecordLayout(rt, rec.get("name", rt), fields)
+        records[rt] = RecordLayout(rt, rec.get("name", rt), [_field(f) for f in rec["fields"]])
     layout = Layout(
         format=data["format"], title=data.get("title", ""), record_length=data["record_length"],
         line_ending=data.get("line_ending", "\r\n"), records=records, sources=data.get("sources", {}),
@@ -129,6 +129,29 @@ def load_layout(name_or_path: str | Path) -> Layout:
     )
     check_layout(layout)
     return layout
+
+
+def customize_layout(layout: Layout, overrides: dict | None) -> Layout:
+    """A copy of a layout with a state's own changes, from its profile's "layout_overrides":
+
+      line_ending        the record separator the state's own sample file uses
+      records            whole records the state defines itself (same JSON shape as a layout file)
+      blank_when_empty   record types whose numeric fields are left blank, not zero-filled,
+                         when no value is given
+
+    The result is checked like any layout: fields contiguous, record length exact."""
+    if not overrides:
+        return layout
+    records = dict(layout.records)
+    for rt, rec in overrides.get("records", {}).items():
+        records[rt] = RecordLayout(rt, rec.get("name", rt), [_field(f) for f in rec["fields"]])
+    for rt in overrides.get("blank_when_empty", []):
+        rec = records[rt]
+        records[rt] = RecordLayout(rt, rec.name, [
+            replace(f, empty="blank") if f.type in ("N", "M", "MW") else f for f in rec.fields])
+    custom = replace(layout, records=records, line_ending=overrides.get("line_ending", layout.line_ending))
+    check_layout(custom)
+    return custom
 
 
 def check_layout(layout: Layout) -> None:
