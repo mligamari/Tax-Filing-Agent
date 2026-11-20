@@ -22,8 +22,8 @@
     "kind_of_employer": "N",
     "employment_code": "R",
     "ui_accounts": {
-      "VA": "0918274"
+      "VA": "0000918274"
     }
   },
-  "_note_ui": "ui_accounts: the employer's state unemployment-insurance account (VEC account number on the workbook's Employer sheet), used by quarterly UI files."
+  "_note_ui": "ui_accounts: the employer's Virginia Employment Commission (VEC) account number, which VEC writes as exactly 10 digits with leading zeros (the workbook's Employer sheet shows the same fictional account, 0918274, without them)."
 }

@@ -9,7 +9,9 @@ income tax and quarterly UI reporting. This writer fills the UI part of RS:
     248-267  State Employer Account Number   (the employer's UI account)
 
 Positions, widths and padding come from the same generated layout tables as the
-W-2 writer, and the RA and RE records are built by the same code. Which records go
+W-2 writer, with the state's own changes from its profile ("layout_overrides": a
+state-defined RT totals record, its line ending, blank instead of zero-filled empty
+fields), and the RA and RE records are built by the same code. Which records go
 in the file, constant values and required fields come from the state's
 "ui_quarterly" profile (taxfiling/states/<state>.json), so a state whose own
 specification differs is a profile change, not new code.
@@ -20,6 +22,7 @@ the writer says so in its notes every time it runs.
 from __future__ import annotations
 
 import re
+from decimal import Decimal
 from typing import Any
 
 from ..issues import Issues
@@ -58,10 +61,30 @@ class QuarterlyEfw2Builder(Efw2Builder):
         values.update({
             "reporting_period": reporting_period(report.tax_year, report.quarter),
             "ui_total_wages": w.gross_wages,
-            "ui_taxable_wages": w.taxable_wages,
             "state_employer_account": account,
         })
+        if self.profile.get("employee_taxable_wages", True):
+            values["ui_taxable_wages"] = w.taxable_wages
+        rule = self.profile.get("name_rule")
+        if rule:
+            for label, name in (("first name", w.first_name), ("last name", w.last_name)):
+                if not re.fullmatch(rule["pattern"], name):
+                    self.issues.warning(where, f"{label} '{name}' has characters other than letters; "
+                                               f"{rule['description']}")
         self._add("RS", values, where)
+
+    def rt_vec(self, report: QuarterlyReport) -> None:
+        """Employer totals in a state-defined RT record (fields named by meaning, from the profile's layout)."""
+        emps = report.employees
+        values: dict[str, Any] = {
+            "employee_count": str(len(emps)),
+            "total_ui_wages": sum((e.gross_wages for e in emps), Decimal(0)),
+            "total_excess_wages": sum((e.excess_wages for e in emps), Decimal(0)),
+            "total_taxable_wages": sum((e.taxable_wages for e in emps), Decimal(0)),
+        }
+        for m, count in enumerate(report.employed_12th_counts, 1):
+            values[f"month{m}_employees"] = str(count)
+        self._add("RT", {k: v for k, v in values.items() if k in self.layout["RT"]}, "totals")
 
     def build_quarterly(self, report: QuarterlyReport) -> list[tuple[str, dict[str, Any]]]:
         state = self.profile["state"]
@@ -84,6 +107,8 @@ class QuarterlyEfw2Builder(Efw2Builder):
         if account and rule and not re.fullmatch(rule["pattern"], account):
             self.issues.error("employer", f"UI account '{account}' does not match the {self.profile['state_name']} "
                                           f"format: {rule['description']}")
+        if account and rule and rule.get("write") == "zero_fill":
+            account = account.rjust(self.layout["RS"]["state_employer_account"].length, "0")
         if report.submitter is None:
             self.issues.error("input", "no submitter settings (they supply the RA record)")
             return self.records
@@ -98,6 +123,8 @@ class QuarterlyEfw2Builder(Efw2Builder):
             self.rs_quarterly(w, report, account)
         if not report.employees:
             self.issues.error("input", f"no employees with wages in {report.tax_year} Q{report.quarter}")
+        if "RT" in self.record_set:
+            self.rt_vec(report)
         if "RF" in self.record_set:
             self.rf(sum(1 for rt, _ in self.records if rt == "RW"))
         return self.records

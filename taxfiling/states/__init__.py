@@ -42,5 +42,11 @@ def report_profile(code: str, report: str = "w2", year: int | None = None) -> di
     if str(year) not in layouts:
         raise ValueError(f"{state['name']} {report.upper()} files are set up for tax year "
                          f"{' and '.join(sorted(layouts))}, not {year}")
-    return {**profile, "layout": layouts[str(year)], "tax_year": year,
+    return {**profile, "layout": layouts[str(year)], "tax_year": year,  # see profile_layout()
             "state": state["state"], "state_name": state["name"], "fips": state["fips"]}
+
+
+def profile_layout(profile: dict):
+    """The layout table for a report profile, with the state's own overrides applied."""
+    from ..layout import customize_layout, load_layout
+    return customize_layout(load_layout(profile["layout"]), profile.get("layout_overrides"))

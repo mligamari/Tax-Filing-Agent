@@ -11,9 +11,14 @@ Checks:
   3. RS: state code, reporting period (the quarter's last month and year), one
      account number, which must be the employer's UI account; taxable wages not
      above total wages; income tax fields empty; one RS per SSN.
-  4. RF counts the RW records in the file.
+  4. RF counts the RW records in the file. A state-defined RT (Virginia's) counts
+     the RS records, its total wages equal the RS records' sum, and its excess
+     and taxable wages add up to its total.
   5. With the source: the same employees in the same order, with the same SSN,
-     name, total and taxable wages, and the same totals.
+     name, total (and, where written, taxable) wages, and the same totals and
+     employed-on-the-12th counts.
+
+Pass the layout with the state's overrides applied (taxfiling.states.profile_layout).
 """
 from __future__ import annotations
 
@@ -41,8 +46,11 @@ def check_quarterly_file(data: bytes | str | Path, layout: Layout, profile: dict
     result = CheckResult()
     issues = result.issues
     lines = split_records(raw, layout, issues)
-    if profile.get("final_line_ending") is False and raw.endswith(b"\r\n"):
-        issues.warning("file", "file ends with CR/LF after the last record; the state profile expects none")
+    sep = layout.line_ending.encode("ascii")
+    if profile.get("final_line_ending") is False and raw.endswith(sep):
+        issues.warning("file", "file ends with a line ending after the last record; the state profile expects none")
+    if profile.get("final_line_ending") is True and not raw.endswith(sep):
+        issues.warning("file", "file has no line ending after the last record; the state's sample has one")
 
     parsed: list[tuple[str, dict | None, str]] = []
     for i, line in enumerate(lines, 1):
@@ -76,6 +84,15 @@ def check_quarterly_file(data: bytes | str | Path, layout: Layout, profile: dict
     accounts = {v["state_employer_account"] for v, _ in rs}
     if len(accounts) > 1:
         issues.error("file", f"RS records carry {len(accounts)} different state employer account numbers")
+    rule = profile.get("account_number")
+    for acct in accounts:
+        core = acct
+        if rule and rule.get("write") == "zero_fill":
+            width = rule.get("digits", 10)
+            core = acct[-width:] if acct.isdigit() and not acct[:-width].strip("0") else acct
+        if rule and not re.fullmatch(rule["pattern"], core):
+            issues.error("file", f"RS state employer account '{acct}' does not match: {rule['description']}")
+    taxable_written = profile.get("employee_taxable_wages", True)
     seen: dict[str, str] = {}
     total = taxable = Decimal(0)
     for v, where in rs:
@@ -91,6 +108,8 @@ def check_quarterly_file(data: bytes | str | Path, layout: Layout, profile: dict
             val = v[key]
             if (isinstance(val, str) and val.strip("0 ")) or (isinstance(val, Decimal) and val):
                 issues.error(where, f"RS {layout['RS'][key].name} holds income tax data in a UI file")
+        if not taxable_written and v["ui_taxable_wages"] is not None:
+            issues.error(where, "RS taxable UI wages are filled in; the state profile leaves them blank")
         if v["ssn"] in seen:
             issues.error(where, f"second RS record for SSN {mask_ssn(v['ssn'])} (first on {seen[v['ssn']]})")
         seen[v["ssn"]] = where
@@ -99,12 +118,29 @@ def check_quarterly_file(data: bytes | str | Path, layout: Layout, profile: dict
     if not rs:
         issues.error("file", "file has no employee (RS) records")
     result.totals["ui_total_wages"] = total
-    result.totals["ui_taxable_wages"] = taxable
+    if taxable_written:
+        result.totals["ui_taxable_wages"] = taxable
+
+    # ---- a state-defined RT (employer totals) ---------------------------------------
+    rt = next(((v, w) for t, v, w in parsed if t == "RT" and v is not None), None)
+    rt_fields = layout["RT"] if "RT" in records and "RT" in layout.records else None
+    if rt is not None and rt_fields is not None and "employee_count" in rt_fields:
+        v, where = rt
+        if int(v["employee_count"] or 0) != len(rs):
+            issues.error(where, f"RT says {v['employee_count']} employees, file has {len(rs)} RS records")
+        if _d(v["total_ui_wages"]) != total:
+            issues.error(where, f"RT total wages {_d(v['total_ui_wages'])} are not the RS records' sum {total}")
+        if _d(v["total_excess_wages"]) + _d(v["total_taxable_wages"]) != _d(v["total_ui_wages"]):
+            issues.error(where, "RT excess wages plus taxable wages do not equal total wages")
+        result.totals["ui_excess_wages"] = _d(v["total_excess_wages"])
+        result.totals["ui_taxable_wages"] = _d(v["total_taxable_wages"])
 
     # ---- compare with the source -----------------------------------------------
     if source is not None:
         state = profile["state"]
         account = re.sub(r"[\s\-]", "", source.employer.ui_accounts.get(state, "")).upper()
+        if rule and rule.get("write") == "zero_fill":
+            account = account.rjust(layout["RS"]["state_employer_account"].length, "0")
         if accounts and accounts != {account}:
             issues.error("file", "RS state employer account does not match the employer's UI account")
         res = [v for rt, v, _ in parsed if rt == "RE" and v is not None]
@@ -122,12 +158,28 @@ def check_quarterly_file(data: bytes | str | Path, layout: Layout, profile: dict
                 if _norm(v[key]) != _norm(want):
                     issues.error(where, f"RS {layout['RS'][key].name} '{v[key]}' does not match the source "
                                         f"'{want}'")
-            for key, want in (("ui_total_wages", w.gross_wages), ("ui_taxable_wages", w.taxable_wages)):
+            pairs = [("ui_total_wages", w.gross_wages)] + ([("ui_taxable_wages", w.taxable_wages)] if taxable_written else [])
+            for key, want in pairs:
                 result.fields_compared += 1
                 if _d(v[key]) != want:
                     issues.error(where, f"RS {layout['RS'][key].name}: file has {_d(v[key])}, source has {want}")
         src_total = sum((w.gross_wages for w in source.employees), Decimal(0))
+        src_excess = sum((w.excess_wages for w in source.employees), Decimal(0))
         src_taxable = sum((w.taxable_wages for w in source.employees), Decimal(0))
-        if (total, taxable) != (src_total, src_taxable):
-            issues.error("file", f"file totals {total} / {taxable} differ from the source {src_total} / {src_taxable}")
+        if total != src_total:
+            issues.error("file", f"file total wages {total} differ from the source {src_total}")
+        if taxable_written and taxable != src_taxable:
+            issues.error("file", f"file taxable wages {taxable} differ from the source {src_taxable}")
+        if rt is not None and rt_fields is not None and "employee_count" in rt_fields:
+            v, where = rt
+            for key, want in (("total_excess_wages", src_excess), ("total_taxable_wages", src_taxable)):
+                result.fields_compared += 1
+                if _d(v[key]) != want:
+                    issues.error(where, f"RT {layout['RT'][key].name}: file has {_d(v[key])}, source has {want}")
+            counts = [sum(1 for w in source.employees if w.employed_12th[m]) for m in range(3)]
+            for m, want in enumerate(counts, 1):
+                result.fields_compared += 1
+                got = int(v[f"month{m}_employees"] or 0)
+                if got != want:
+                    issues.error(where, f"RT month {m} employee count: file has {got}, source has {want}")
     return result
