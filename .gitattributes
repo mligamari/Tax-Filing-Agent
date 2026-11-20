@@ -3,3 +3,4 @@
 # changing their line endings on checkout, e.g. with core.autocrlf on Windows.
 specs/ssa/*.txt -text
 examples/*/output/*.txt -text
+tests/data/*.txt -text

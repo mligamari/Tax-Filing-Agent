@@ -7,7 +7,7 @@ quarter are kept.
 
 Checks made here, so a bad number never reaches a file:
   * gross wages = excess wages + taxable wages, and none are negative;
-  * one row per SSN in the quarter;
+  * one row per SSN in the quarter, and each SSN passes SSA's validity rules;
   * the year and quarter columns hold whole numbers, quarter 1 to 4.
 """
 from __future__ import annotations
@@ -19,6 +19,7 @@ from openpyxl import load_workbook
 
 from ..issues import Issues
 from ..model import QuarterlyWages
+from ..validate import ssn_problem
 from .excel import _digits, _flag, _money, _text, load_mapping  # noqa: F401  (load_mapping re-exported)
 
 
@@ -81,6 +82,9 @@ def read_quarterly_workbook(path: str | Path, mapping: dict, tax_year: int,
                                 for m in (1, 2, 3)),  # type: ignore[arg-type]
             source_row=rownum,
         )
+        problem = ssn_problem(w.ssn)
+        if problem:
+            issues.error(where, f"SSN {problem}")
         for label, amount in (("gross", w.gross_wages), ("excess", w.excess_wages), ("taxable", w.taxable_wages)):
             if amount < 0:
                 issues.error(where, f"UI {label} wages {amount} are negative")

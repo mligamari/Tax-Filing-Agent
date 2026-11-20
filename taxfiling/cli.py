@@ -31,7 +31,7 @@ from .model import WageReport
 from .privacy import mask_ssn
 from .readers.excel import load_mapping, read_w2_workbook
 from .readers.quarterly import load_quarterly_report
-from .states import available_states, report_profile
+from .states import available_states, profile_layout, report_profile
 from .validate import validate_report
 
 
@@ -82,7 +82,7 @@ def _layout_for(args, path: Path | None = None) -> str:
 
 def cmd_w2(args) -> int:
     profile = report_profile(args.state, "w2", args.year)
-    layout = load_layout(profile["layout"])
+    layout = profile_layout(profile)
     report, issues = _load_source(args, layout, need_submitter=True)
     print(f"Read {len(report.employees)} employees for {report.employer.name} from {args.input}")
 
@@ -132,7 +132,7 @@ def _load_quarterly(args, profile) -> tuple:
 
 def cmd_ui(args) -> int:
     profile = report_profile(args.state, "ui_quarterly", args.year)
-    layout = load_layout(profile["layout"])
+    layout = profile_layout(profile)
     if not args.submitter:
         raise SystemExit("--submitter is required to write a file (it supplies the RA record and UI account)")
     report, issues = _load_quarterly(args, profile)
@@ -159,18 +159,17 @@ def cmd_ui(args) -> int:
     out.write_bytes(data)
     m1, m2, m3 = report.employed_12th_counts
     print(f"Wrote {out} ({len(data):,} bytes) for {profile['state_name']} ({profile['agency']})")
-    print(f"Employees on the payroll on the 12th of each month: {m1}, {m2}, {m3} (not in the file; see the "
-          "profile notes)")
+    where = "in the RT record" if "RT" in profile.get("records", []) else "not in the file; see the profile notes"
+    print(f"Employees on the payroll on the 12th of each month: {m1}, {m2}, {m3} ({where})")
     if profile.get("provisional"):
-        print("PROVISIONAL: built on SSA's generic RS record, not the state's own specification. "
-              "Do not upload until the state's specification has been checked.")
+        print(f"PROVISIONAL: {profile.get('provisional_note', '')}")
     print(format_report(result, title="Round-trip check"))
     return 0
 
 
 def cmd_check_ui(args) -> int:
     profile = report_profile(args.state, "ui_quarterly", args.year or _year_in_file(Path(args.file)))
-    layout = load_layout(profile["layout"])
+    layout = profile_layout(profile)
     source = None
     if args.input:
         source, read_issues = _load_quarterly(args, profile)
@@ -196,7 +195,11 @@ def cmd_check(args) -> int:
 
 
 def cmd_show(args) -> int:
-    layout = load_layout(_layout_for(args, Path(args.file)))
+    if args.state:  # a state's own record definitions, e.g. Virginia's VEC totals record
+        path = Path(args.file)
+        layout = profile_layout(report_profile(args.state, args.report, args.year or _year_in_file(path)))
+    else:
+        layout = load_layout(_layout_for(args, Path(args.file)))
     data = Path(args.file).read_bytes().decode("ascii", errors="replace")
     lines = data.replace("\r\n", "\n").rstrip("\n").split("\n")
     shown = 0
@@ -383,6 +386,11 @@ def build_parser() -> argparse.ArgumentParser:
     sh.add_argument("--record", help="only this record type, e.g. RW")
     sh.add_argument("--limit", type=int, help="show at most this many records")
     sh.add_argument("--show-ssn", action="store_true", help="print full SSNs")
+    sh.add_argument("--state", choices=available_states(),
+                    help="read the file with this state's own record definitions (with --report)")
+    sh.add_argument("--report", default="w2", choices=["w2", "ui_quarterly"],
+                    help="which of the state's reports the file is (default w2)")
+    sh.add_argument("--year", type=int, help="tax year (default: the year in the file)")
     sh.set_defaults(func=cmd_show)
 
     ly = sub.add_parser("layout", help="list a layout table and where each field came from")

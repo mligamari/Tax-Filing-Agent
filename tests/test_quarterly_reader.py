@@ -96,3 +96,10 @@ def test_empty_quarter_and_bad_quarter(tmp_path):
     assert any("no rows" in i.message for i in issues.errors)
     with pytest.raises(ValueError):
         read_quarterly_workbook(path, MAPPING, 2025, 5)
+
+
+def test_rejects_an_invalid_ssn_without_printing_it(tmp_path):
+    path = _sheet(tmp_path / "q.xlsx", [{"Employee SSN": "666-12-3456"}])
+    _, issues = read_quarterly_workbook(path, MAPPING, 2025, 1)
+    assert any("SSN first three digits" in i.message for i in issues.errors)
+    assert all("3456" not in str(i) for i in issues.items)
