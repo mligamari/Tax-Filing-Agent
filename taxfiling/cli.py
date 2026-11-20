@@ -7,6 +7,7 @@
     python -m taxfiling show "W2 REPORT 2025.txt" --record RW --limit 2
     python -m taxfiling layout efw2_ty2025 --record RO
     python -m taxfiling map --input export.xlsx [--ai none|claude|local] [--dry-run]
+    python -m taxfiling demo [--port 8765] [--no-browser]
 
 Everything runs locally, and SSNs are masked in everything printed (the output file
 itself holds full SSNs, as the state requires). The only command that can open a
@@ -331,6 +332,13 @@ def cmd_map(args) -> int:
     return 0 if review.complete else 1
 
 
+def cmd_demo(args) -> int:
+    from .demo.server import serve   # imported here: the other commands never start a server
+
+    serve(port=args.port, open_browser=not args.no_browser)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="taxfiling", description=__doc__.split("\n\n")[0])
     sub = p.add_subparsers(dest="command", required=True)
@@ -419,6 +427,11 @@ def build_parser() -> argparse.ArgumentParser:
     mp.add_argument("--allow-incomplete", action="store_true",
                     help="write the mapping even if required fields are missing")
     mp.set_defaults(func=cmd_map)
+
+    dm = sub.add_parser("demo", help="open the demo screen in your browser (served on 127.0.0.1 only)")
+    dm.add_argument("--port", type=int, default=8765, help="port on 127.0.0.1 (default 8765)")
+    dm.add_argument("--no-browser", action="store_true", help="do not open a browser window")
+    dm.set_defaults(func=cmd_demo)
     return p
 
 

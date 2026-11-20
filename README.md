@@ -17,6 +17,43 @@ and [SECURITY.md](SECURITY.md).
 > All data in this repository is synthetic. The SSNs are random numbers attached to
 > made-up people at a made-up company.
 
+## Try the demo (about two minutes)
+
+A small screen in your browser walks through the whole job: pick a spreadsheet, see
+which column the agent thinks holds each W-2 box, fix anything it was unsure about,
+choose the state file, and download it after it has been checked. No API key is
+needed. It runs on your own computer, and nothing is sent anywhere.
+
+```bash
+git clone https://github.com/mligamari/Tax-Filing-Agent.git
+cd Tax-Filing-Agent
+python -m pip install -e .
+python -m taxfiling demo           # opens http://127.0.0.1:8765/ in your browser; Ctrl+C stops it
+```
+
+What to try:
+
+1. Click **Messy payroll export**. Its headers look like a real payroll system's
+   ("Fed W/H", "SS Wgs", "St", "Work State").
+2. Click **Propose a mapping**. The offline rules match 21 of the 23 required fields and leave
+   two highlighted, because two columns could each be the employee's state. Pick
+   **St** for `state` and **Work State** for `box15_state`.
+3. Choose **Virginia annual W-2 file** and click **Make the file and check it**. The
+   program writes the file, reads it back field by field and compares all 50 employees
+   with the spreadsheet. The file is offered for download only if every field matches.
+4. Open **What the AI would see** to read the exact message a model would get: column
+   headers and value shapes like `###-##-####`, never a value. The **Audit log** shows
+   what left the computer (with the offline rules, nothing).
+
+The tidy Virginia sample also makes the quarterly unemployment-insurance file for the
+Virginia Employment Commission (marked provisional, see below). To use Claude instead
+of the offline rules, install `".[ai]"` and start the demo from a terminal where
+`ANTHROPIC_API_KEY` is set; the screen shows the exact message before you press Send.
+
+![Column mapping step, with two fields left for the person to choose](docs/demo-mapping.png)
+
+![Checked file: round-trip check passed, totals, masked preview and download](docs/demo-result.png)
+
 ## What works today
 
 **Virginia W-2 annual file** (Virginia Tax, Web Upload, EFW2 format) for tax year 2025,
@@ -153,6 +190,7 @@ python -m pytest
 | `ui` | Writes a quarterly unemployment-insurance wage file for one quarter (`--quarter 1`-`4`) and runs its round-trip check. Virginia's is provisional (see above). |
 | `check-ui` | Checks a quarterly UI file; with `--input`, also compares every employee and amount with the workbook. |
 | `layout` | Lists a layout table, with the page of SSA's spec that defines each field. |
+| `demo` | Opens the demo screen in your browser (see [Try the demo](#try-the-demo-about-two-minutes)). `--port` changes the port, `--no-browser` skips opening a window. |
 | `map` | Proposes a column mapping for a spreadsheet laid out differently from the sample, with fixed rules (default, offline), Claude (`--ai claude`) or a model on your computer (`--ai local`). `--dry-run` prints exactly what would be sent. |
 
 `check` and `show` read the tax year from the file and pick the matching layout. `w2`
@@ -410,7 +448,8 @@ what is left over.
 
 ## Privacy and security (the rest of the pipeline)
 
-* **No network access.** Only `map --ai claude` and `map --ai local` can open a connection.
+* **No network access.** Only `map --ai claude` and `map --ai local` (and the demo's Claude
+  option, which uses the same guarded client) can open a connection.
   A test runs the whole write, check and show cycle with Python's socket functions replaced
   by ones that fail, and another proves those commands never import an HTTP library.
 * **SSNs stay out of everything printed.** Console output, warnings and error
@@ -420,6 +459,13 @@ what is left over.
 * **What is checked is what is saved.** The round-trip check runs on the exact bytes
   before they are written, so a file that fails its check never sits on disk under
   the name the state expects.
+* **The demo screen is local only.** It listens on 127.0.0.1, answers only requests
+  addressed to 127.0.0.1 or localhost, and requires a random key that is made when it
+  starts and written only into its own page, so another web site open in the same browser
+  cannot use it. The page may load nothing from the internet (a strict
+  Content-Security-Policy), everything from the spreadsheet is shown as text, SSNs are masked
+  on screen, and uploads and finished files sit in a temporary folder deleted on exit.
+  Standard library only, so nothing extra to install.
 * **Real data stays out of git.** `.gitignore` excludes a `private/` folder for real
   workbooks and the mapping audit log, and only synthetic data is committed.
 
@@ -440,8 +486,11 @@ still the employer's decision.
 * **The VEC quarterly file** matches VEC's sample file, but the meaning of VEC's RT totals
   fields is inferred (see above). VEC's templates ask for letters only in names, so names
   such as O'Brien or Batista-Cruz get a warning; the program does not change them.
-* Next: a VEC test upload, then ICESA (VEC's ICESA sample is in `tests/data/`), more
-  states, and a simple local app.
+* **The demo** uses the synthetic submitter settings (`examples/va_<year>/submitter.json`)
+  for the RA record, and makes the quarterly file only from a workbook laid out like the
+  tidy sample.
+* Next: a VEC test upload, then ICESA (VEC's ICESA sample is in `tests/data/`) and more
+  states.
 
 Before filing for real, upload a test file through the state's portal and compare
 it with SSA's free AccuWage tool. This project is a portfolio piece, not tax advice.
@@ -479,10 +528,12 @@ taxfiling/
   check.py             round-trip checker
   check_quarterly.py   round-trip checker for quarterly UI files
   cli.py               command line
+  demo/                the demo screen: app.py (pipeline), server.py (127.0.0.1 server), static/ (page)
 specs/ssa/             text of SSA's EFW2 specifications for 2025 and 2026
 tools/                 spec-text parser and layout builder
 examples/va_2025/      synthetic workbook, its generator, submitter settings, output
 examples/va_2026/      the same for tax year 2026
 examples/va_2025_messy/ the 2025 data as a messy payroll export, its generator and mapping
+docs/                  screenshots of the demo
 tests/                 pytest suite
 ```

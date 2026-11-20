@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="demo-key" content="__DEMO_KEY__">
+<title>W-2 Filing Agent</title>
+<link rel="icon" href="/static/icon.svg">
+<link rel="stylesheet" href="/static/style.css">
+<script src="/static/app.js" defer></script>
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <div class="brand">
+      <img src="/static/icon.svg" alt="" width="36" height="36">
+      <div>
+        <h1>W-2 Filing Agent</h1>
+        <p>Turns a W-2 spreadsheet into the fixed-width text file a state wage-reporting portal accepts, then re-reads the file to prove it matches.</p>
+      </div>
+    </div>
+    <ul class="badges">
+      <li>Runs on this computer</li>
+      <li>SSNs never sent to AI</li>
+      <li>Synthetic data only</li>
+    </ul>
+  </div>
+</header>
+
+<main class="wrap">
+  <ol class="steps" id="stepper">
+    <li data-step="1" class="active">Spreadsheet</li>
+    <li data-step="2">Column mapping</li>
+    <li data-step="3">Output</li>
+    <li data-step="4">Checked file</li>
+  </ol>
+
+  <!-- Step 1 -->
+  <section class="card" id="step1">
+    <h2><span class="num">1</span> Choose a spreadsheet</h2>
+    <p class="lead">Drop in a W-2 workbook, or start with one of the synthetic samples. Every person and company in the samples is made up.</p>
+    <label class="drop" id="drop">
+      <input type="file" id="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
+      <strong>Drop an .xlsx file here</strong>
+      <span>or click to browse. It stays on this computer.</span>
+    </label>
+    <div class="samples" id="samples"></div>
+    <p class="loaded hidden" id="loaded"></p>
+  </section>
+
+  <!-- Step 2 -->
+  <section class="card hidden" id="step2">
+    <h2><span class="num">2</span> Map the columns</h2>
+    <p class="lead">Every payroll system names its columns differently. The agent proposes which column holds which W-2 box. You review it before anything is written.</p>
+
+    <div class="modes" role="radiogroup" aria-label="Who proposes the mapping">
+      <label class="mode"><input type="radio" name="ai" value="none" checked>
+        <span><strong>Offline rules</strong><small>No AI, no network, no API key. Matches header names with fixed rules.</small></span></label>
+      <label class="mode" id="claude-mode"><input type="radio" name="ai" value="claude">
+        <span><strong>Claude AI</strong><small id="claude-note">Sends only column headers and value shapes to Anthropic's API.</small></span></label>
+    </div>
+
+    <details class="sent" id="payload-box">
+      <summary><span id="payload-summary">What the AI would see</span></summary>
+      <p class="muted">This is the complete message a model receives. Values are replaced by their shape: <code>123-45-6789</code> becomes <code>###-##-####</code>, a name becomes <code>Aa Aa</code>. Before sending, the program checks this text, and the request itself, against every cell in the workbook, and refuses to send if any value appears.</p>
+      <pre id="payload"></pre>
+    </details>
+
+    <div class="actions">
+      <button class="primary" id="propose">Propose mapping</button>
+      <span class="status" id="propose-status"></span>
+    </div>
+
+    <div id="mapping" class="hidden">
+      <div class="callout warn hidden" id="missing"></div>
+      <div id="map-table">
+      <div class="table-wrap">
+        <table class="map">
+          <thead><tr><th>W-2 field</th><th>Spreadsheet column</th><th>Values look like</th><th>Confidence</th></tr></thead>
+          <tbody id="map-body"></tbody>
+        </table>
+      </div>
+      <label class="toggle"><input type="checkbox" id="show-optional"> Show optional fields that were not found</label>
+      </div>
+      <div id="box12"></div>
+      <ul class="notes" id="notes"></ul>
+      <details class="sent" id="audit-box">
+        <summary><span id="audit-summary">Audit log: what left this computer</span></summary>
+        <div id="audit"></div>
+      </details>
+    </div>
+  </section>
+
+  <!-- Step 3 -->
+  <section class="card hidden" id="step3">
+    <h2><span class="num">3</span> Choose the file to make</h2>
+    <div class="outputs" id="outputs"></div>
+    <div class="row">
+      <label>Tax year <select id="year"></select></label>
+      <label id="quarter-label" class="hidden">Quarter
+        <select id="quarter"><option value="1">Q1 (Jan to Mar)</option><option value="2">Q2 (Apr to Jun)</option><option value="3">Q3 (Jul to Sep)</option><option value="4">Q4 (Oct to Dec)</option></select></label>
+    </div>
+    <div class="actions">
+      <button class="primary" id="build" disabled>Make the file and check it</button>
+      <span class="status" id="build-status"></span>
+    </div>
+  </section>
+
+  <!-- Step 4 -->
+  <section class="card hidden" id="step4">
+    <h2><span class="num">4</span> Checked file</h2>
+    <div id="result"></div>
+  </section>
+
+  <footer class="foot">
+    <p>Portfolio project. The files follow SSA's EFW2 specification and Virginia's published rules, but nothing here is filed with any agency. Source and design notes are in the repository README.</p>
+  </footer>
+</main>
+</body>
+</html>
