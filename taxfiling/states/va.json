@@ -104,7 +104,7 @@
         "RS (SSA layout): state code 51 at 3-4; SSN, first name (15), middle, last name (20); reporting period 197-202 (last month and year of the quarter, e.g. 032025); total quarterly UI wages 203-213; VEC account number 248-267 as 20 digits, zero-filled (VEC's sample shows 20 zeros; VEC's portal help asks for a 10-digit account number such as 0001234567). VEC's sample has 'B' at 5 and 308 and leaves every other numeric field blank, including per-employee taxable wages (214-224) and all income tax fields; this file does the same.",
         "RT is VEC's own record, not SSA's: from VEC's sample, a 7-digit count at 3-9, an unidentified 2-digit field at 11-12, three 14-digit amounts at 14-27, 29-42 and 44-57 and three 7-digit counts at 59-65, 67-73 and 75-81, each separated by one blank. Form FC-20 asks for exactly three wage totals (total wages, wages above the $8,000 base, wages subject to tax) and three monthly employee counts (0 to 9,999,999, i.e. 7 digits), so this file puts them there in FC-20's order. INFERRED: confirm with VEC.",
         "Records are separated by LF (not CR/LF), with an LF after the last record, as in VEC's EFW2 sample.",
-        "VEC's Excel template: SSN 9 digits, not starting 000, 666 or 900-999, no all-zero group; first name up to 15 letters, last name up to 20 letters; amounts are positive.",
+        "VEC's Excel template: SSN 9 digits, not starting 000, 666 or 900-999, no all-zero group; first name up to 15 letters, last name up to 20 letters (letters only: punctuation is removed from names, as in every file this program writes); amounts are positive.",
         "The RA and RE records follow SSA's layout; VEC's sample fills the company, submitter and employer names and addresses, tax year and EINs."
       ],
       "source": {
@@ -318,10 +318,6 @@
         "description": "VEC account number: exactly 10 digits, with its leading zeros (e.g. 0001234567)",
         "write": "zero_fill",
         "digits": 10
-      },
-      "name_rule": {
-        "pattern": "^[A-Za-z ]*$",
-        "description": "VEC's Excel template asks for letters only in first and last names"
       },
       "default_file_name": "VEC UI {year} Q{quarter}.txt",
       "employee_taxable_wages": false

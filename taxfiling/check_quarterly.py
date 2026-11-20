@@ -26,7 +26,7 @@ import re
 from decimal import Decimal
 from pathlib import Path
 
-from .check import CheckResult, _check_fields, _d, _norm, split_records
+from .check import CheckResult, _check_fields, _d, _norm, check_name_characters, expected_name, split_records
 from .layout import Layout
 from .model import QuarterlyReport
 from .privacy import mask_ssn
@@ -153,7 +153,9 @@ def check_quarterly_file(data: bytes | str | Path, layout: Layout, profile: dict
             result.employees_compared += 1
             if v["ssn"] != w.ssn:
                 issues.error(where, f"SSN {mask_ssn(v['ssn'])} is not the source's {mask_ssn(w.ssn)} ({w.where()})")
-            for key, want in (("first_name", w.first_name), ("last_name", w.last_name)):
+            check_name_characters(v, "RS", where, issues, profile)
+            for key, want in (("first_name", expected_name(w.first_name, profile)),
+                              ("last_name", expected_name(w.last_name, profile))):
                 result.fields_compared += 1
                 if _norm(v[key]) != _norm(want):
                     issues.error(where, f"RS {layout['RS'][key].name} '{v[key]}' does not match the source "
